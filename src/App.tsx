@@ -12,21 +12,20 @@ export const App: React.FC = () => {
 
   return (
     <RoutineProvider>
-      {/* Fundo externo escuro para destaque suave em telas maiores */}
-      <div className="min-h-screen bg-[#070b14] text-slate-100 flex justify-center">
-        {/* Container principal simulando proporção de iPhone (max-w-md mx-auto min-h-screen) */}
-        <div className="w-full max-w-md mx-auto min-h-screen bg-[#0f172a] flex flex-col shadow-2xl border-x border-slate-800/60 relative">
-          {/* Painel de Tranquilidade sempre visível no topo */}
+      <div className="min-h-screen bg-[#E5E5EA] text-[#1C1C1E] flex justify-center">
+        {/* Proporção nativa de iPhone no padrão Apple Health Light Mode (#F2F2F7) */}
+        <div className="w-full max-w-md mx-auto min-h-screen bg-[#F2F2F7] flex flex-col relative shadow-sm">
+          {/* Cabeçalho e Painel de Tranquilidade no topo */}
           <TranquilityHeader />
 
-          {/* Área central ativa conforme a aba selecionada */}
+          {/* Área principal das abas */}
           <main className="flex-1 flex flex-col">
             {activeTab === 'Rotina' && <RoutineControls />}
             {activeTab === 'Histórico' && <HistoryView />}
             {activeTab === 'Pediatra' && <PediatricianView />}
           </main>
 
-          {/* Barra de navegação inferior simples para um polegar */}
+          {/* Barra de Navegação Inferior Nativa do iOS */}
           <BottomNav activeTab={activeTab} onSelectTab={setActiveTab} />
         </div>
       </div>

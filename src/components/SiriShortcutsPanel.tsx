@@ -14,7 +14,7 @@ interface SiriShortcutItem {
   param: SiriCommandKey;
   voicePhrase: string;
   description: string;
-  tone: 'amber' | 'emerald' | 'sky';
+  tone: 'peach' | 'blue' | 'indigo';
 }
 
 const SIRI_SHORTCUTS: SiriShortcutItem[] = [
@@ -22,49 +22,49 @@ const SIRI_SHORTCUTS: SiriShortcutItem[] = [
     param: 'mamar_esquerdo',
     voicePhrase: '"E aí Siri, mamar peito esquerdo"',
     description: 'Inicia o cronômetro de mamada no Peito Esquerdo',
-    tone: 'amber',
+    tone: 'peach',
   },
   {
     param: 'mamar_direito',
     voicePhrase: '"E aí Siri, mamar peito direito"',
     description: 'Inicia o cronômetro de mamada no Peito Direito',
-    tone: 'amber',
+    tone: 'peach',
   },
   {
     param: 'parar_mamada',
     voicePhrase: '"E aí Siri, parar mamada"',
     description: 'Finaliza a mamada ativa e salva no histórico',
-    tone: 'amber',
+    tone: 'peach',
   },
   {
     param: 'xixi',
     voicePhrase: '"E aí Siri, fralda de xixi"',
     description: 'Registra imediatamente uma fralda de Só Xixi',
-    tone: 'emerald',
+    tone: 'blue',
   },
   {
     param: 'coco',
     voicePhrase: '"E aí Siri, fralda de cocô"',
     description: 'Registra imediatamente uma fralda de Só Cocô',
-    tone: 'emerald',
+    tone: 'blue',
   },
   {
     param: 'xixi_coco',
     voicePhrase: '"E aí Siri, fralda de xixi e cocô"',
     description: 'Registra imediatamente uma fralda de Xixi + Cocô',
-    tone: 'emerald',
+    tone: 'blue',
   },
   {
     param: 'dormiu',
     voicePhrase: '"E aí Siri, o bebê dormiu"',
     description: 'Inicia o cronômetro de sono do bebê',
-    tone: 'sky',
+    tone: 'indigo',
   },
   {
     param: 'acordou',
     voicePhrase: '"E aí Siri, o bebê acordou"',
     description: 'Finaliza o cronômetro de sono e salva no histórico',
-    tone: 'sky',
+    tone: 'indigo',
   },
 ];
 
@@ -92,7 +92,6 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
       setCopiedParam(param);
       window.setTimeout(() => setCopiedParam(null), 2200);
     } catch {
-      // Fallback caso clipboard não esteja disponível
       const input = document.createElement('input');
       input.value = fullUrl;
       document.body.appendChild(input);
@@ -105,7 +104,6 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
   };
 
   const handleTestCommand = (param: SiriCommandKey) => {
-    // Atualiza a URL com ?siri=... antes de disparar para demonstrar a limpeza via replaceState
     try {
       window.history.replaceState({}, '', `/?siri=${param}`);
     } catch {
@@ -116,20 +114,20 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="w-full max-w-md max-h-[88vh] bg-[#0f172a] border-t sm:border border-slate-700/80 rounded-t-3xl sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden">
-        {/* Cabeçalho do Modal Configurar Siri */}
-        <div className="px-4 py-3.5 bg-slate-900/95 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-amber-500/25 via-sky-500/25 to-emerald-500/25 border border-amber-400/40 flex items-center justify-center text-amber-200">
-              <Mic className="w-4 h-4" />
+    <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="w-full max-w-md max-h-[88vh] bg-[#F2F2F7] rounded-t-3xl sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden">
+        {/* Cabeçalho Estilo iOS Sheet */}
+        <div className="px-5 py-4 bg-white/90 backdrop-blur-xl border-b border-black/[0.06] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-2xl bg-[#EBF5FF] flex items-center justify-center text-[#007AFF]">
+              <Mic className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm font-extrabold text-slate-100 leading-tight">
-                Configurar Siri & Instalar no iPhone
+              <h2 className="text-base font-bold text-[#1C1C1E] leading-tight">
+                Atalhos da Siri
               </h2>
-              <p className="text-[11px] text-slate-400">
-                Comandos de voz de madrugada sem usar as mãos
+              <p className="text-xs text-[#8E8E93]">
+                Comandos de voz sem usar as mãos
               </p>
             </div>
           </div>
@@ -137,28 +135,28 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800/80 text-slate-300 hover:text-white active:scale-95"
+            className="p-2 rounded-full bg-[#F2F2F7] text-[#8E8E93] hover:text-[#1C1C1E] active:scale-95"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Conteúdo rolável com links exatos para copiar */}
-        <div className="p-4 space-y-4 overflow-y-auto">
+        {/* Conteúdo rolável */}
+        <div className="p-4 space-y-3.5 overflow-y-auto">
           {/* Guia Rápido de Atalhos do iOS */}
-          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 space-y-1.5">
-            <div className="text-xs font-bold text-amber-200 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+          <div className="rounded-2xl bg-white p-4 shadow-sm border border-black/[0.04] space-y-1.5">
+            <div className="text-xs font-bold text-[#1C1C1E] flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-[#007AFF]" />
               Como configurar no app "Atalhos" do iPhone:
             </div>
-            <ol className="text-[11px] text-slate-300 space-y-1 list-decimal list-inside">
+            <ol className="text-xs text-[#8E8E93] space-y-1 list-decimal list-inside">
               <li>Copie o link do comando desejado abaixo.</li>
               <li>
-                Abra o app <strong>Atalhos (Shortcuts)</strong> no iPhone e toque em{' '}
-                <strong>+</strong>.
+                Abra o app <strong className="text-[#1C1C1E]">Atalhos</strong> no iPhone e toque em{' '}
+                <strong className="text-[#1C1C1E]">+</strong>.
               </li>
               <li>
-                Adicione a ação <strong>"Abrir URLs"</strong> e cole o link copiado.
+                Adicione a ação <strong className="text-[#1C1C1E]">"Abrir URLs"</strong> e cole o link.
               </li>
               <li>Dê o nome do comando de voz (ex: "Mamar peito esquerdo").</li>
             </ol>
@@ -173,22 +171,22 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
               return (
                 <div
                   key={item.param}
-                  className="rounded-2xl bg-slate-900/90 border border-slate-800/90 p-3 space-y-2"
+                  className="rounded-2xl bg-white p-3.5 shadow-sm border border-black/[0.04] space-y-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div
                         className={`text-xs font-bold ${
-                          item.tone === 'amber'
-                            ? 'text-amber-200'
-                            : item.tone === 'emerald'
-                            ? 'text-emerald-200'
-                            : 'text-sky-200'
+                          item.tone === 'peach'
+                            ? 'text-[#FF6B4A]'
+                            : item.tone === 'blue'
+                            ? 'text-[#007AFF]'
+                            : 'text-[#5856D6]'
                         }`}
                       >
                         {item.voicePhrase}
                       </div>
-                      <p className="text-[11px] text-slate-400">
+                      <p className="text-[11px] text-[#8E8E93] mt-0.5">
                         {item.description}
                       </p>
                     </div>
@@ -196,27 +194,27 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
                     <button
                       type="button"
                       onClick={() => handleTestCommand(item.param)}
-                      className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-semibold text-slate-200 flex items-center gap-1 shrink-0 active:scale-95"
+                      className="px-3 py-1.5 rounded-full bg-[#F2F2F7] text-[11px] font-semibold text-[#1C1C1E] flex items-center gap-1 shrink-0 active:scale-95"
                       title="Simular comando da Siri agora"
                     >
-                      <Play className="w-3 h-3 fill-current text-amber-300" />
+                      <Play className="w-3 h-3 fill-current text-[#007AFF]" />
                       Testar
                     </button>
                   </div>
 
                   {/* Caixa com URL exata e botão Copiar */}
-                  <div className="flex items-center justify-between gap-2 bg-slate-950/90 border border-slate-800 rounded-xl px-2.5 py-1.5">
-                    <code className="text-[11px] font-mono text-slate-300 truncate">
+                  <div className="flex items-center justify-between gap-2 bg-[#F2F2F7] rounded-xl px-3 py-2">
+                    <code className="text-[11px] font-mono text-[#1C1C1E] truncate">
                       {fullUrl}
                     </code>
 
                     <button
                       type="button"
                       onClick={() => handleCopyUrl(item.param)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition-all active:scale-95 ${
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 transition-all active:scale-95 ${
                         isCopied
-                          ? 'bg-emerald-500 text-slate-950'
-                          : 'bg-amber-500/20 text-amber-200 border border-amber-400/40 hover:bg-amber-500/30'
+                          ? 'bg-[#34C759] text-white'
+                          : 'bg-[#007AFF] text-white'
                       }`}
                     >
                       {isCopied ? (
@@ -238,13 +236,12 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
           </div>
 
           {/* Dica de Instalação PWA no Safari do iPhone */}
-          <div className="rounded-2xl bg-sky-950/30 border border-sky-500/30 p-3 flex items-start gap-2.5">
-            <Smartphone className="w-4 h-4 text-sky-300 shrink-0 mt-0.5" />
-            <div className="text-[11px] text-sky-100/90 leading-relaxed">
-              <strong>Instalar como App no iPhone (Tela Cheia):</strong> No Safari, toque em{' '}
+          <div className="rounded-2xl bg-[#EBF5FF] p-3.5 flex items-start gap-2.5">
+            <Smartphone className="w-4 h-4 text-[#007AFF] shrink-0 mt-0.5" />
+            <div className="text-xs text-[#1C1C1E] leading-relaxed">
+              <strong className="text-[#007AFF]">Instalar no iPhone:</strong> No Safari, toque em{' '}
               <strong>Compartilhar</strong> e selecione{' '}
-              <strong>"Adicionar à Tela de Início"</strong>. O app abrirá como{' '}
-              <em>Rotina Bebê</em> sem barras do navegador.
+              <strong>"Adicionar à Tela de Início"</strong> para abrir em tela cheia.
             </div>
           </div>
         </div>

@@ -1,13 +1,13 @@
 {
   "name": "Rotina Bebê • Rotinê",
   "short_name": "Rotina Bebê",
-  "description": "Controle acolhedor de rotina para recém-nascido: amamentação, fraldas, janela de sono e resumo para o pediatra.",
+  "description": "Controle acolhedor de rotina para recém-nascido no padrão Apple Health.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
   "lang": "pt-BR",
   "icons": [
     {

@@ -7,16 +7,15 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+        sans: [
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"SF Pro Display"',
+          '"SF Pro Text"',
+          '"Helvetica Neue"',
+          'sans-serif',
+        ],
       },
-      colors: {
-        night: {
-          950: '#090e1a',
-          900: '#0f172a',
-          800: '#1e293b',
-          700: '#334155',
-        }
-      }
     },
   },
   plugins: [],
