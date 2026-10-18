@@ -30,9 +30,18 @@ import {
 } from '../utils/dateHelpers';
 import { supabase } from '../utils/supabase/client';
 
-export const STORAGE_KEY = 'rotine_baby_data_v1';
+// Chaves antigas de teste que são limpas na inicialização
+const LEGACY_STORAGE_KEYS = [
+  'rotine_baby_data_v1',
+  'rotine_baby_data',
+  'rotine_seed_data',
+];
+
+// Cache local limpo (sem nenhum dado fictício/mock) espelhado com o Supabase
+const SUPABASE_CACHE_KEY = 'rotine_supabase_mirror_v3';
 
 export type SiriCommandKey =
+  | 'mamar'
   | 'mamar_esquerdo'
   | 'mamar_direito'
   | 'parar_mamada'
@@ -50,307 +59,49 @@ export interface SiriConfirmationBanner {
   timeFormatted: string;
 }
 
-function generateId(prefix: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+interface BabyEventRow {
+  id: string;
+  type: 'mamada' | 'fralda' | 'sono';
+  subtype: 'esquerdo' | 'direito' | 'mamadeira' | 'xixi' | 'coco' | 'xixi_coco' | null;
+  start_time: string;
+  end_time?: string | null;
+  duration_seconds?: number | null;
+  amount_ml?: number | null;
+  created_at?: string;
 }
 
-function saveToLocalStorageImmediate(state: RotineStorageData) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state, null, 2));
-  } catch (err) {
-    console.error('Erro ao salvar dados no localStorage:', err);
-  }
-}
-
-async function syncStateToSupabase(state: RotineStorageData) {
-  try {
-    await supabase.from('routine_state').upsert(
-      {
-        id: 'default_baby',
-        baby_name: state.babyProfile.name,
-        payload: state,
-        updated_at: state.updatedAt || new Date().toISOString(),
-      },
-      { onConflict: 'id' }
-    );
-  } catch {
-    // Caso a tabela ainda não tenha sido criada no Supabase, mantém offline no localStorage sem erros
-  }
-}
-
-async function syncEventToSupabase(ev: RoutineEvent) {
-  try {
-    await supabase.from('routine_events').upsert(
-      {
-        id: ev.id,
-        type: ev.type,
-        date_key: ev.dateKey,
-        timestamp: ev.timestamp,
-        time_formatted: ev.timeFormatted,
-        feeding_type: ev.type === 'mamada' ? ev.feedingType || 'peito' : null,
-        breast: ev.type === 'mamada' ? ev.breast || null : null,
-        volume_ml: ev.type === 'mamada' ? ev.volumeMl || null : null,
-        diaper_type: ev.type === 'fralda' ? ev.diaperType : null,
-        has_pee: ev.type === 'fralda' ? ev.hasPee : null,
-        has_poop: ev.type === 'fralda' ? ev.hasPoop : null,
-        start_time: ev.type === 'sono' ? ev.startTime : null,
-        end_time: ev.type === 'sono' ? ev.endTime : null,
-        duration_minutes: 'durationMinutes' in ev ? ev.durationMinutes : null,
-        duration_seconds: 'durationSeconds' in ev ? ev.durationSeconds || null : null,
-        notes: ev.notes || null,
-      },
-      { onConflict: 'id' }
-    );
-  } catch {
-    // Ignora silenciosamente se a tabela não existir ainda
-  }
+interface BabyActiveStateRow {
+  id: number;
+  feeding_active: boolean;
+  feeding_side: 'esquerdo' | 'direito' | null;
+  feeding_start_time: string | null;
+  sleeping_active: boolean;
+  sleeping_start_time: string | null;
+  last_breast_side: 'esquerdo' | 'direito' | null;
+  updated_at?: string;
 }
 
 /**
- * Gera registros realistas para um dia anterior completo (24h de rotina de recém-nascido)
- * para que o painel do Pediatra (últimos 7 dias) já tenha histórico rico.
+ * Gera um UUID v4 válido para a coluna `id (uuid)` da tabela `public.baby_events`
  */
-function createPastDaySeedEvents(baseDate: Date, dayOffset: number): RoutineEvent[] {
-  const dateKey = getLocalDateKey(baseDate);
-  const year = baseDate.getFullYear();
-  const month = baseDate.getMonth();
-  const day = baseDate.getDate();
-
-  const atTime = (h: number, m: number) => new Date(year, month, day, h, m, 0, 0);
-
-  const feedHours = [1, 4, 7, 10, 13, 16, 19, 22];
-  const peeHours = [1, 4, 8, 11, 14, 17, 20];
-  const sleepBlocks = [
-    { startH: 1, startM: 30, dur: 150 + (dayOffset % 2) * 15 },
-    { startH: 4, startM: 30, dur: 140 },
-    { startH: 7, startM: 45, dur: 110 + (dayOffset % 3) * 10 },
-    { startH: 10, startM: 45, dur: 115 },
-    { startH: 14, startM: 0, dur: 105 },
-    { startH: 17, startM: 0, dur: 95 },
-    { startH: 20, startM: 0, dur: 135 },
-  ];
-
-  const events: RoutineEvent[] = [];
-
-  feedHours.forEach((h, idx) => {
-    const t = atTime(h, (idx * 7 + dayOffset * 5) % 45);
-    const breast: BreastSide = (idx + dayOffset) % 2 === 0 ? 'Esquerdo' : 'Direito';
-    const dur = 15 + ((idx + dayOffset) % 4) * 3;
-    events.push({
-      id: `seed_past_${dateKey}_mamada_${idx}`,
-      type: 'mamada',
-      feedingType: 'peito',
-      dateKey,
-      timestamp: t.toISOString(),
-      timeFormatted: formatTimeHHMM(t),
-      breast,
-      durationMinutes: dur,
-      durationSeconds: dur * 60,
-    });
+function generateUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
   });
-
-  peeHours.forEach((h, idx) => {
-    if (idx === 6 && dayOffset % 2 === 1) return;
-    const t = atTime(h, 25);
-    const hasPoop = idx % 2 === 0;
-    const diaperType: DiaperSubType = hasPoop ? 'ambos' : 'xixi';
-    events.push({
-      id: `seed_past_${dateKey}_fralda_${idx}`,
-      type: 'fralda',
-      dateKey,
-      timestamp: t.toISOString(),
-      timeFormatted: formatTimeHHMM(t),
-      diaperType,
-      hasPee: true,
-      hasPoop,
-    });
-  });
-
-  sleepBlocks.forEach((b, idx) => {
-    const start = atTime(b.startH, b.startM);
-    const end = new Date(start.getTime() + b.dur * 60000);
-    events.push({
-      id: `seed_past_${dateKey}_sono_${idx}`,
-      type: 'sono',
-      dateKey,
-      timestamp: end.toISOString(),
-      timeFormatted: formatTimeHHMM(start),
-      startTime: start.toISOString(),
-      endTime: end.toISOString(),
-      durationMinutes: b.dur,
-      durationSeconds: b.dur * 60,
-    });
-  });
-
-  return events.sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
 }
 
-/**
- * Gera dados iniciais acolhedores para o dia de hoje + últimos 6 dias
- * caso o localStorage esteja vazio.
- */
-function createInitialSeedData(now: Date = new Date()): RotineStorageData {
-  const todayKey = getLocalDateKey(now);
-  const startOfToday = getStartOfToday(now);
-  const msSinceMidnight = now.getTime() - startOfToday.getTime();
-
-  const minutesAgoToday = (minsAgo: number): Date => {
-    const targetMs = now.getTime() - minsAgo * 60 * 1000;
-    if (targetMs < startOfToday.getTime() + 60 * 1000) {
-      return new Date(startOfToday.getTime() + Math.max(1, Math.floor(msSinceMidnight * 0.2)));
-    }
-    return new Date(targetMs);
-  };
-
-  const t1 = minutesAgoToday(360);
-  const t2 = minutesAgoToday(240);
-  const t3 = minutesAgoToday(150);
-  const t4 = minutesAgoToday(80);
-
-  const s1Start = minutesAgoToday(330);
-  const s1End = minutesAgoToday(245);
-
-  const s2Start = minutesAgoToday(210);
-  const s2End = minutesAgoToday(115);
-
-  const s3Start = minutesAgoToday(70);
-  const s3End = minutesAgoToday(25);
-
-  const rawEventsToday: RoutineEvent[] = [
-    {
-      id: 'mamada_seed_1',
-      type: 'mamada',
-      feedingType: 'peito',
-      dateKey: todayKey,
-      timestamp: t1.toISOString(),
-      timeFormatted: formatTimeHHMM(t1),
-      breast: 'Direito',
-      durationMinutes: 18,
-      durationSeconds: 18 * 60,
-      notes: 'Mamada tranquila da madrugada',
-    },
-    {
-      id: 'fralda_seed_1',
-      type: 'fralda',
-      dateKey: todayKey,
-      timestamp: new Date(t1.getTime() + 15 * 60000).toISOString(),
-      timeFormatted: formatTimeHHMM(new Date(t1.getTime() + 15 * 60000)),
-      diaperType: 'xixi',
-      hasPee: true,
-      hasPoop: false,
-    },
-    {
-      id: 'sono_seed_1',
-      type: 'sono',
-      dateKey: todayKey,
-      timestamp: s1End.toISOString(),
-      timeFormatted: formatTimeHHMM(s1Start),
-      startTime: s1Start.toISOString(),
-      endTime: s1End.toISOString(),
-      durationMinutes: 85,
-      durationSeconds: 85 * 60,
-      notes: 'Dormiu no berço',
-    },
-    {
-      id: 'mamada_seed_2',
-      type: 'mamada',
-      feedingType: 'peito',
-      dateKey: todayKey,
-      timestamp: t2.toISOString(),
-      timeFormatted: formatTimeHHMM(t2),
-      breast: 'Esquerdo',
-      durationMinutes: 22,
-      durationSeconds: 22 * 60,
-    },
-    {
-      id: 'fralda_seed_2',
-      type: 'fralda',
-      dateKey: todayKey,
-      timestamp: new Date(t2.getTime() + 20 * 60000).toISOString(),
-      timeFormatted: formatTimeHHMM(new Date(t2.getTime() + 20 * 60000)),
-      diaperType: 'ambos',
-      hasPee: true,
-      hasPoop: true,
-      notes: 'Amarelo mostarda normal',
-    },
-    {
-      id: 'sono_seed_2',
-      type: 'sono',
-      dateKey: todayKey,
-      timestamp: s2End.toISOString(),
-      timeFormatted: formatTimeHHMM(s2Start),
-      startTime: s2Start.toISOString(),
-      endTime: s2End.toISOString(),
-      durationMinutes: 95,
-      durationSeconds: 95 * 60,
-    },
-    {
-      id: 'fralda_seed_3',
-      type: 'fralda',
-      dateKey: todayKey,
-      timestamp: t3.toISOString(),
-      timeFormatted: formatTimeHHMM(t3),
-      diaperType: 'xixi',
-      hasPee: true,
-      hasPoop: false,
-    },
-    {
-      id: 'mamada_seed_3',
-      type: 'mamada',
-      feedingType: 'peito',
-      dateKey: todayKey,
-      timestamp: t4.toISOString(),
-      timeFormatted: formatTimeHHMM(t4),
-      breast: 'Direito',
-      durationMinutes: 16,
-      durationSeconds: 16 * 60,
-      notes: 'Boa pega, arrotou rápido',
-    },
-    {
-      id: 'fralda_seed_4',
-      type: 'fralda',
-      dateKey: todayKey,
-      timestamp: new Date(t4.getTime() + 10 * 60000).toISOString(),
-      timeFormatted: formatTimeHHMM(new Date(t4.getTime() + 10 * 60000)),
-      diaperType: 'xixi',
-      hasPee: true,
-      hasPoop: false,
-    },
-    {
-      id: 'sono_seed_3',
-      type: 'sono',
-      dateKey: todayKey,
-      timestamp: s3End.toISOString(),
-      timeFormatted: formatTimeHHMM(s3Start),
-      startTime: s3Start.toISOString(),
-      endTime: s3End.toISOString(),
-      durationMinutes: 45,
-      durationSeconds: 45 * 60,
-    },
-  ];
-
-  const eventsToday = [...rawEventsToday].sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
-
-  const daysMap: Record<string, RoutineEvent[]> = {
-    [todayKey]: eventsToday,
-  };
-
-  for (let i = 1; i <= 6; i++) {
-    const pastDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-    const pastKey = getLocalDateKey(pastDate);
-    daysMap[pastKey] = createPastDaySeedEvents(pastDate, i);
-  }
-
+function createZeroedState(now: Date = new Date()): RotineStorageData {
   return {
-    version: 2,
+    version: 3,
     updatedAt: now.toISOString(),
     babyProfile: {
-      name: 'Noah',
-      birthDate: getLocalDateKey(new Date(now.getTime() - 14 * 86400000)),
+      name: 'Bebê',
+      birthDate: getLocalDateKey(now),
       dailyPeeGoal: 6,
       dailyPeeMaxGoal: 8,
     },
@@ -367,62 +118,136 @@ function createInitialSeedData(now: Date = new Date()): RotineStorageData {
       startedAt: null,
       previousSideSaved: null,
     },
-    days: daysMap,
+    days: {},
   };
 }
 
-function normalizeStoredData(parsed: RotineStorageData): RotineStorageData {
-  const feedingSide: BreastSide =
-    parsed.activeFeeding?.lado || parsed.activeFeeding?.breast || 'Esquerdo';
-  const feedingStartMs =
-    typeof parsed.activeFeeding?.startTime === 'number'
-      ? parsed.activeFeeding.startTime
-      : parsed.activeFeeding?.startedAt
-      ? new Date(parsed.activeFeeding.startedAt).getTime()
-      : null;
+function cleanupLegacyMockStorage() {
+  try {
+    for (const key of LEGACY_STORAGE_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
 
-  const sleepStartMs =
-    typeof parsed.activeSleep?.startTime === 'number'
-      ? parsed.activeSleep.startTime
-      : parsed.activeSleep?.startedAt
-      ? new Date(parsed.activeSleep.startedAt).getTime()
-      : null;
+function saveCleanCache(state: RotineStorageData, lastBreastSide: BreastSide | null) {
+  try {
+    localStorage.setItem(
+      SUPABASE_CACHE_KEY,
+      JSON.stringify({ state, lastBreastSide })
+    );
+  } catch {
+    // ignore
+  }
+}
 
-  const updatedDays = { ...parsed.days };
-  if ((parsed.version || 1) < 2 && Object.keys(updatedDays).length === 1) {
-    const now = new Date();
-    for (let i = 1; i <= 6; i++) {
-      const pastDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const pastKey = getLocalDateKey(pastDate);
-      if (!updatedDays[pastKey]) {
-        updatedDays[pastKey] = createPastDaySeedEvents(pastDate, i);
+function loadCleanCache(): {
+  state: RotineStorageData;
+  lastBreastSide: BreastSide | null;
+} {
+  cleanupLegacyMockStorage();
+  try {
+    const raw = localStorage.getItem(SUPABASE_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as {
+        state?: RotineStorageData;
+        lastBreastSide?: BreastSide | null;
+      };
+      if (parsed && parsed.state && parsed.state.version === 3) {
+        return {
+          state: parsed.state,
+          lastBreastSide: parsed.lastBreastSide ?? null,
+        };
       }
     }
+  } catch {
+    // ignore
+  }
+  return {
+    state: createZeroedState(new Date()),
+    lastBreastSide: null,
+  };
+}
+
+function dbSideToBreastSide(side?: string | null): BreastSide {
+  return side?.toLowerCase() === 'direito' ? 'Direito' : 'Esquerdo';
+}
+
+function breastSideToDbSide(side: BreastSide): 'esquerdo' | 'direito' {
+  return side === 'Direito' ? 'direito' : 'esquerdo';
+}
+
+function mapBabyEventRowToRoutineEvent(row: BabyEventRow): RoutineEvent {
+  const startDate = new Date(row.start_time || row.created_at || new Date().toISOString());
+  const endDate = row.end_time ? new Date(row.end_time) : startDate;
+  const referenceDate = row.type === 'sono' ? endDate : startDate;
+  const dateKey = getLocalDateKey(referenceDate);
+  const durSec = typeof row.duration_seconds === 'number' ? Math.max(0, row.duration_seconds) : 0;
+  const durMin = durSec > 0 ? Math.max(1, Math.round(durSec / 60)) : 1;
+
+  if (row.type === 'mamada') {
+    const isBottle = row.subtype === 'mamadeira';
+    const breast: BreastSide = dbSideToBreastSide(row.subtype);
+    const mamada: MamadaEvent = {
+      id: row.id,
+      type: 'mamada',
+      feedingType: isBottle ? 'mamadeira' : 'peito',
+      dateKey,
+      timestamp: referenceDate.toISOString(),
+      timeFormatted: formatTimeHHMM(startDate),
+      ...(isBottle ? { volumeMl: row.amount_ml ?? 60 } : { breast }),
+      durationMinutes: durMin,
+      durationSeconds: durSec > 0 ? durSec : undefined,
+    };
+    return mamada;
   }
 
-  return {
-    ...parsed,
-    version: 2,
-    days: updatedDays,
-    babyProfile: {
-      ...parsed.babyProfile,
-      dailyPeeGoal: parsed.babyProfile?.dailyPeeGoal || 6,
-      dailyPeeMaxGoal: parsed.babyProfile?.dailyPeeMaxGoal || 8,
-    },
-    activeFeeding: {
-      isFeeding: Boolean(parsed.activeFeeding?.isFeeding && feedingStartMs),
-      lado: feedingSide,
-      breast: feedingSide,
-      startTime: feedingStartMs,
-      startedAt: feedingStartMs ? new Date(feedingStartMs).toISOString() : null,
-      previousSideSaved: parsed.activeFeeding?.previousSideSaved || null,
-    },
-    activeSleep: {
-      isSleeping: Boolean(parsed.activeSleep?.isSleeping && sleepStartMs),
-      startTime: sleepStartMs,
-      startedAt: sleepStartMs ? new Date(sleepStartMs).toISOString() : null,
-    },
+  if (row.type === 'fralda') {
+    const sub = row.subtype;
+    const diaperType: DiaperSubType =
+      sub === 'coco' ? 'coco' : sub === 'xixi_coco' ? 'ambos' : 'xixi';
+    const fralda: FraldaEvent = {
+      id: row.id,
+      type: 'fralda',
+      dateKey,
+      timestamp: startDate.toISOString(),
+      timeFormatted: formatTimeHHMM(startDate),
+      diaperType,
+      hasPee: diaperType === 'xixi' || diaperType === 'ambos',
+      hasPoop: diaperType === 'coco' || diaperType === 'ambos',
+    };
+    return fralda;
+  }
+
+  const sono: SonoEvent = {
+    id: row.id,
+    type: 'sono',
+    dateKey,
+    timestamp: endDate.toISOString(),
+    timeFormatted: formatTimeHHMM(startDate),
+    startTime: startDate.toISOString(),
+    endTime: endDate.toISOString(),
+    durationMinutes: durMin,
+    durationSeconds: durSec > 0 ? durSec : undefined,
   };
+  return sono;
+}
+
+function groupEventsByDateKey(events: RoutineEvent[]): Record<string, RoutineEvent[]> {
+  const days: Record<string, RoutineEvent[]> = {};
+  for (const ev of events) {
+    const list = days[ev.dateKey] || [];
+    list.push(ev);
+    days[ev.dateKey] = list;
+  }
+  Object.keys(days).forEach((k) => {
+    days[k].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  });
+  return days;
 }
 
 function calculateWakeWindowInfo(
@@ -457,10 +282,10 @@ function calculateWakeWindowInfo(
   if (!referenceMs) {
     return {
       awakeMinutes: 0,
-      awakeFormatted: 'Recém-acordado',
+      awakeFormatted: 'Sem registro',
       zone: 'tranquila',
       statusLabel: 'Janela tranquila',
-      statusSubtext: 'Menos de 45 min acordado • Bebê descansado e receptivo',
+      statusSubtext: 'Registre uma mamada ou soneca para acompanhar a janela de sono',
       sinceTimeFormatted: null,
     };
   }
@@ -488,8 +313,8 @@ function calculateWakeWindowInfo(
     statusSubtext = 'Entre 45 e 60 min acordado • Diminua luzes e estímulos agora';
   } else if (awakeMinutes > 60) {
     zone = 'passou';
-    statusLabel = 'Passou da janela - risco de efeito vulcão/cansaço excessivo';
-    statusSubtext = 'Acima de 60 min acordado • Acolha no escuro para reduzir o cortisol';
+    statusLabel = 'Passou da janela - risco de cansaço excessivo';
+    statusSubtext = 'Acima de 60 min acordado • Acolha em ambiente calmo para ninar';
   }
 
   return {
@@ -521,10 +346,11 @@ interface RoutineContextType {
   todayEvents: RoutineEvent[];
   allEventsSorted: RoutineEvent[];
   todaySummary: TodaySummary;
+  isLoadingSupabase: boolean;
   // Siri Deep Link Banner & Trigger
   siriConfirmationBanner: SiriConfirmationBanner | null;
   dismissSiriBanner: () => void;
-  executeSiriCommand: (siriParam: string) => void;
+  executeSiriCommand: (siriParam: string) => Promise<void>;
   // Ações de Amamentação e Mamadeira
   addMamada: (breast: BreastSide, durationMinutes?: number, notes?: string) => MamadaEvent;
   addMamadeira: (volumeMl: number, notes?: string) => MamadaEvent;
@@ -543,87 +369,279 @@ interface RoutineContextType {
   // Gerenciamento de registros
   deleteEvent: (id: string, dateKey: string) => void;
   resetToSampleData: () => void;
-  clearAllRecords: () => void;
+  clearAllRecords: () => Promise<void>;
+  refreshFromSupabase: () => Promise<void>;
 }
 
 const RoutineContext = createContext<RoutineContextType | undefined>(undefined);
 
 export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [data, setData] = useState<RotineStorageData>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as RotineStorageData;
-        if (parsed && parsed.days && parsed.babyProfile) {
-          const normalized = normalizeStoredData(parsed);
-          saveToLocalStorageImmediate(normalized);
-          return normalized;
-        }
-      }
-    } catch (err) {
-      console.error('Erro ao ler dados do localStorage:', err);
-    }
-    const seed = createInitialSeedData(new Date());
-    saveToLocalStorageImmediate(seed);
-    return seed;
-  });
-
+  const initialCache = useMemo(() => loadCleanCache(), []);
+  const [data, setData] = useState<RotineStorageData>(initialCache.state);
+  const [lastBreastSideState, setLastBreastSideState] = useState<BreastSide | null>(
+    initialCache.lastBreastSide
+  );
+  const [isLoadingSupabase, setIsLoadingSupabase] = useState<boolean>(true);
   const [now, setNow] = useState<Date>(() => new Date());
   const [manualWakeOverrideMs, setManualWakeOverrideMs] = useState<number | null>(null);
   const [siriConfirmationBanner, setSiriConfirmationBanner] =
     useState<SiriConfirmationBanner | null>(null);
 
+  // Mantém referência sempre atualizada para funções assíncronas e Siri
+  const dataRef = useRef<RotineStorageData>(data);
   useEffect(() => {
-    saveToLocalStorageImmediate(data);
-    void syncStateToSupabase(data);
-  }, [data]);
+    dataRef.current = data;
+    saveCleanCache(data, lastBreastSideState);
+  }, [data, lastBreastSideState]);
 
-  // Busca estado salvo no Supabase ao iniciar caso exista na nuvem
+  const lastBreastRef = useRef<BreastSide | null>(lastBreastSideState);
   useEffect(() => {
-    let isMounted = true;
-    (async () => {
+    lastBreastRef.current = lastBreastSideState;
+  }, [lastBreastSideState]);
+
+  /**
+   * Garante que a linha única `id = 1` exista em `public.baby_active_state`
+   */
+  const upsertActiveStateRow = useCallback(
+    async (patch: Partial<BabyActiveStateRow>): Promise<BabyActiveStateRow | null> => {
+      const currentData = dataRef.current;
+      const fallbackRow: BabyActiveStateRow = {
+        id: 1,
+        feeding_active:
+          patch.feeding_active !== undefined
+            ? patch.feeding_active
+            : currentData.activeFeeding.isFeeding,
+        feeding_side:
+          patch.feeding_side !== undefined
+            ? patch.feeding_side
+            : currentData.activeFeeding.isFeeding
+            ? breastSideToDbSide(currentData.activeFeeding.lado)
+            : null,
+        feeding_start_time:
+          patch.feeding_start_time !== undefined
+            ? patch.feeding_start_time
+            : currentData.activeFeeding.startedAt,
+        sleeping_active:
+          patch.sleeping_active !== undefined
+            ? patch.sleeping_active
+            : currentData.activeSleep.isSleeping,
+        sleeping_start_time:
+          patch.sleeping_start_time !== undefined
+            ? patch.sleeping_start_time
+            : currentData.activeSleep.startedAt,
+        last_breast_side:
+          patch.last_breast_side !== undefined
+            ? patch.last_breast_side
+            : lastBreastRef.current
+            ? breastSideToDbSide(lastBreastRef.current)
+            : null,
+        updated_at: new Date().toISOString(),
+      };
+
       try {
-        const { data: row, error } = await supabase
-          .from('routine_state')
-          .select('payload, updated_at')
-          .eq('id', 'default_baby')
+        const { data: upserted, error } = await supabase
+          .from('baby_active_state')
+          .upsert(fallbackRow, { onConflict: 'id' })
+          .select('*')
           .maybeSingle();
 
-        if (!error && row?.payload && isMounted) {
-          const remoteState = normalizeStoredData(row.payload as RotineStorageData);
-          setData((localPrev) => {
-            const remoteTime = new Date(remoteState.updatedAt || 0).getTime();
-            const localTime = new Date(localPrev.updatedAt || 0).getTime();
-            if (remoteTime > localTime) {
-              saveToLocalStorageImmediate(remoteState);
-              return remoteState;
-            }
-            return localPrev;
-          });
+        if (error) {
+          console.warn('Aviso ao sincronizar baby_active_state no Supabase:', error.message);
+          return fallbackRow;
         }
-      } catch {
-        // Permanece usando localStorage caso offline ou tabela ainda não criada
+        return (upserted as BabyActiveStateRow) || fallbackRow;
+      } catch (err) {
+        console.warn('Erro de rede ao atualizar baby_active_state:', err);
+        return fallbackRow;
       }
-    })();
-    return () => {
-      isMounted = false;
-    };
+    },
+    []
+  );
+
+  /**
+   * Insere um registro real na tabela `public.baby_events`
+   */
+  const insertBabyEventToSupabase = useCallback(async (row: BabyEventRow) => {
+    try {
+      const { error } = await supabase.from('baby_events').insert(row);
+      if (error) {
+        console.warn('Aviso ao inserir em baby_events no Supabase:', error.message);
+      }
+    } catch (err) {
+      console.warn('Erro de rede ao inserir em baby_events:', err);
+    }
   }, []);
 
+  /**
+   * Busca todos os registros de `baby_events` e o estado de `baby_active_state` (`id = 1`)
+   */
+  const refreshFromSupabase = useCallback(async () => {
+    try {
+      const [eventsRes, activeRes] = await Promise.all([
+        supabase
+          .from('baby_events')
+          .select('*')
+          .order('start_time', { ascending: false })
+          .limit(500),
+        supabase
+          .from('baby_active_state')
+          .select('*')
+          .eq('id', 1)
+          .maybeSingle(),
+      ]);
+
+      const hasValidEventsResponse = !eventsRes.error && Array.isArray(eventsRes.data);
+      const hasValidActiveResponse = !activeRes.error;
+
+      if (hasValidEventsResponse || hasValidActiveResponse) {
+        const remoteRows = (eventsRes.data || []) as BabyEventRow[];
+        const mappedEvents = remoteRows.map(mapBabyEventRowToRoutineEvent);
+        const remoteDays = groupEventsByDateKey(mappedEvents);
+
+        const activeRow = (activeRes.data as BabyActiveStateRow | null) || null;
+
+        // Se a linha id=1 ainda não existir no banco, tenta inicializá-la silenciosamente
+        if (!activeRow && !activeRes.error) {
+          void supabase
+            .from('baby_active_state')
+            .upsert(
+              {
+                id: 1,
+                feeding_active: false,
+                feeding_side: null,
+                feeding_start_time: null,
+                sleeping_active: false,
+                sleeping_start_time: null,
+                last_breast_side: null,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'id' }
+            );
+        }
+
+        if (activeRow?.last_breast_side) {
+          setLastBreastSideState(dbSideToBreastSide(activeRow.last_breast_side));
+        }
+
+        setData((prev) => {
+          // Se o banco retornou eventos ou se o banco está vazio sem erro, usa os dados do banco.
+          // Caso o banco esteja vazio apenas porque RLS bloqueou a escrita anterior na mesma sessão,
+          // preserva os eventos locais recém-criados pela mãe para não sumirem da tela.
+          const mergedDays =
+            mappedEvents.length > 0
+              ? remoteDays
+              : Object.keys(prev.days).length > 0
+              ? prev.days
+              : {};
+
+          const nextFeedingActive = activeRow
+            ? Boolean(activeRow.feeding_active && activeRow.feeding_start_time)
+            : prev.activeFeeding.isFeeding;
+
+          const nextFeedingSide: BreastSide = activeRow?.feeding_side
+            ? dbSideToBreastSide(activeRow.feeding_side)
+            : prev.activeFeeding.lado;
+
+          const nextFeedingStartMs =
+            activeRow?.feeding_active !== false && activeRow?.feeding_start_time
+              ? new Date(activeRow.feeding_start_time).getTime()
+              : nextFeedingActive
+              ? prev.activeFeeding.startTime
+              : null;
+
+          const nextSleepingActive = activeRow
+            ? Boolean(activeRow.sleeping_active && activeRow.sleeping_start_time)
+            : prev.activeSleep.isSleeping;
+
+          const nextSleepingStartMs =
+            activeRow?.sleeping_active && activeRow?.sleeping_start_time
+              ? new Date(activeRow.sleeping_start_time).getTime()
+              : nextSleepingActive
+              ? prev.activeSleep.startTime
+              : null;
+
+          const nextState: RotineStorageData = {
+            ...prev,
+            version: 3,
+            updatedAt: new Date().toISOString(),
+            days: mergedDays,
+            activeFeeding: {
+              isFeeding: Boolean(nextFeedingActive && nextFeedingStartMs),
+              lado: nextFeedingSide,
+              breast: nextFeedingSide,
+              startTime: nextFeedingActive ? nextFeedingStartMs : null,
+              startedAt:
+                nextFeedingActive && nextFeedingStartMs
+                  ? new Date(nextFeedingStartMs).toISOString()
+                  : null,
+              previousSideSaved: prev.activeFeeding.previousSideSaved,
+            },
+            activeSleep: {
+              isSleeping: Boolean(nextSleepingActive && nextSleepingStartMs),
+              startTime: nextSleepingActive ? nextSleepingStartMs : null,
+              startedAt:
+                nextSleepingActive && nextSleepingStartMs
+                  ? new Date(nextSleepingStartMs).toISOString()
+                  : null,
+            },
+          };
+
+          return nextState;
+        });
+      }
+    } catch (err) {
+      console.warn('Erro ao buscar dados iniciais do Supabase:', err);
+    } finally {
+      setIsLoadingSupabase(false);
+      setNow(new Date());
+    }
+  }, []);
+
+  // Carrega dados do Supabase ao iniciar e assina mudanças em tempo real (Realtime)
   useEffect(() => {
-    const syncClockOnWake = () => {
+    cleanupLegacyMockStorage();
+    void refreshFromSupabase();
+
+    const channel = supabase
+      .channel('rotine_realtime_sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'baby_events' },
+        () => {
+          void refreshFromSupabase();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'baby_active_state' },
+        () => {
+          void refreshFromSupabase();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [refreshFromSupabase]);
+
+  // Recarrega do Supabase sempre que o app volta do segundo plano ou ganha foco
+  useEffect(() => {
+    const handleWakeOrFocus = () => {
       if (document.visibilityState === 'visible') {
         setNow(new Date());
+        void refreshFromSupabase();
       }
     };
-    window.addEventListener('focus', syncClockOnWake);
-    document.addEventListener('visibilitychange', syncClockOnWake);
+    window.addEventListener('focus', handleWakeOrFocus);
+    document.addEventListener('visibilitychange', handleWakeOrFocus);
     return () => {
-      window.removeEventListener('focus', syncClockOnWake);
-      document.removeEventListener('visibilitychange', syncClockOnWake);
+      window.removeEventListener('focus', handleWakeOrFocus);
+      document.removeEventListener('visibilitychange', handleWakeOrFocus);
     };
-  }, []);
+  }, [refreshFromSupabase]);
 
+  // Relógio em tempo real (1s quando há cronômetro ativo, 15s em repouso)
   useEffect(() => {
     const isTimerRunning = data.activeSleep.isSleeping || data.activeFeeding.isFeeding;
     const intervalMs = isTimerRunning ? 1000 : 15000;
@@ -666,7 +684,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     let timeSinceLastFeedingText = 'Sem registro';
     let minutesSinceLastFeeding: number | null = null;
-    let lastBreastUsed: BreastSide | null = null;
+    let lastBreastUsed: BreastSide | null = lastBreastSideState;
     let suggestedNextBreast: BreastSide = 'Esquerdo';
 
     if (lastAnyFeeding) {
@@ -677,8 +695,10 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (lastBreastFeeding && lastBreastFeeding.breast) {
       lastBreastUsed = lastBreastFeeding.breast;
-      suggestedNextBreast =
-        lastBreastFeeding.breast === 'Esquerdo' ? 'Direito' : 'Esquerdo';
+    }
+
+    if (lastBreastUsed) {
+      suggestedNextBreast = lastBreastUsed === 'Esquerdo' ? 'Direito' : 'Esquerdo';
     }
 
     const todayDiapers = todayEvents.filter(
@@ -692,8 +712,8 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       (ev): ev is SonoEvent => ev.type === 'sono'
     );
 
-    let totalSleepMinutesToday = todaySleeps.reduce(
-      (acc, s) => acc + (s.durationMinutes || 0),
+    let totalSleepSecondsToday = todaySleeps.reduce(
+      (acc, s) => acc + (s.durationSeconds ?? (s.durationMinutes || 0) * 60),
       0
     );
 
@@ -703,12 +723,11 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (data.activeSleep.isSleeping && activeSleepStartMs) {
       const effectiveStartMs = Math.max(startOfTodayMs, activeSleepStartMs);
-      const activeMins = Math.max(
-        0,
-        Math.floor((now.getTime() - effectiveStartMs) / 60000)
-      );
-      totalSleepMinutesToday += activeMins;
+      const activeSecs = Math.max(0, Math.floor((now.getTime() - effectiveStartMs) / 1000));
+      totalSleepSecondsToday += activeSecs;
     }
+
+    const totalSleepMinutesToday = Math.floor(totalSleepSecondsToday / 60);
 
     const todayFeedings = todayEvents.filter(
       (e): e is MamadaEvent => e.type === 'mamada'
@@ -734,7 +753,10 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       peeMaxGoal: data.babyProfile.dailyPeeMaxGoal || 8,
       poopCountToday,
       totalSleepMinutesToday,
-      totalSleepFormatted: formatDurationMinutes(totalSleepMinutesToday),
+      totalSleepFormatted:
+        totalSleepSecondsToday > 0 && totalSleepSecondsToday < 60
+          ? `${totalSleepSecondsToday} seg`
+          : formatDurationMinutes(totalSleepMinutesToday),
       sleepStatus: data.activeSleep.isSleeping ? 'Dormindo' : 'Acordado',
       wakeWindow,
       feedingCountToday,
@@ -748,16 +770,17 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
     data.babyProfile.dailyPeeGoal,
     data.babyProfile.dailyPeeMaxGoal,
     manualWakeOverrideMs,
+    lastBreastSideState,
   ]);
 
-  const insertEvent = useCallback((newEvent: RoutineEvent) => {
-    void syncEventToSupabase(newEvent);
+  const appendEventToLocalState = useCallback((newEvent: RoutineEvent) => {
     setData((prev) => {
       const existingDayList = prev.days[newEvent.dateKey] || [];
-      const updatedDayList = [newEvent, ...existingDayList].sort(
+      const withoutDuplicate = existingDayList.filter((e) => e.id !== newEvent.id);
+      const updatedDayList = [newEvent, ...withoutDuplicate].sort(
         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
       );
-      const nextState: RotineStorageData = {
+      return {
         ...prev,
         updatedAt: new Date().toISOString(),
         days: {
@@ -765,40 +788,61 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
           [newEvent.dateKey]: updatedDayList,
         },
       };
-      saveToLocalStorageImmediate(nextState);
-      return nextState;
     });
   }, []);
 
   const addMamada = useCallback(
     (breast: BreastSide, durationMinutes = 15, notes?: string): MamadaEvent => {
-      const current = new Date();
-      const dateKey = getLocalDateKey(current);
+      const end = new Date();
+      const durationSeconds = Math.max(1, Math.round(durationMinutes * 60));
+      const start = new Date(end.getTime() - durationSeconds * 1000);
+      const dateKey = getLocalDateKey(end);
+      const id = generateUuid();
+
       const newEvent: MamadaEvent = {
-        id: generateId('mamada'),
+        id,
         type: 'mamada',
         feedingType: 'peito',
         dateKey,
-        timestamp: current.toISOString(),
-        timeFormatted: formatTimeHHMM(current),
+        timestamp: end.toISOString(),
+        timeFormatted: formatTimeHHMM(start),
         breast,
         durationMinutes,
-        durationSeconds: durationMinutes * 60,
+        durationSeconds,
         ...(notes ? { notes } : {}),
       };
-      insertEvent(newEvent);
-      setNow(current);
+
+      appendEventToLocalState(newEvent);
+      setLastBreastSideState(breast);
+      setNow(end);
+
+      void insertBabyEventToSupabase({
+        id,
+        type: 'mamada',
+        subtype: breastSideToDbSide(breast),
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        duration_seconds: durationSeconds,
+        amount_ml: null,
+        created_at: end.toISOString(),
+      });
+      void upsertActiveStateRow({
+        last_breast_side: breastSideToDbSide(breast),
+      });
+
       return newEvent;
     },
-    [insertEvent]
+    [appendEventToLocalState, insertBabyEventToSupabase, upsertActiveStateRow]
   );
 
   const addMamadeira = useCallback(
     (volumeMl: number, notes?: string): MamadaEvent => {
       const current = new Date();
       const dateKey = getLocalDateKey(current);
+      const id = generateUuid();
+
       const newEvent: MamadaEvent = {
-        id: generateId('mamadeira'),
+        id,
         type: 'mamada',
         feedingType: 'mamadeira',
         dateKey,
@@ -806,39 +850,60 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         timeFormatted: formatTimeHHMM(current),
         volumeMl,
         durationMinutes: 10,
+        durationSeconds: 600,
         ...(notes ? { notes } : {}),
       };
-      insertEvent(newEvent);
+
+      appendEventToLocalState(newEvent);
       setNow(current);
+
+      void insertBabyEventToSupabase({
+        id,
+        type: 'mamada',
+        subtype: 'mamadeira',
+        start_time: current.toISOString(),
+        end_time: current.toISOString(),
+        duration_seconds: 600,
+        amount_ml: volumeMl,
+        created_at: current.toISOString(),
+      });
+
       return newEvent;
     },
-    [insertEvent]
+    [appendEventToLocalState, insertBabyEventToSupabase]
   );
 
-  const startFeedingTimer = useCallback((lado: BreastSide) => {
-    const startMs = Date.now();
-    const current = new Date(startMs);
-    setNow(current);
-    setData((prev) => {
-      const nextState: RotineStorageData = {
+  const startFeedingTimer = useCallback(
+    (lado: BreastSide) => {
+      const startMs = Date.now();
+      const current = new Date(startMs);
+      const iso = current.toISOString();
+
+      setNow(current);
+      setData((prev) => ({
         ...prev,
-        updatedAt: current.toISOString(),
+        updatedAt: iso,
         activeFeeding: {
           isFeeding: true,
           lado,
           breast: lado,
           startTime: startMs,
-          startedAt: current.toISOString(),
+          startedAt: iso,
           previousSideSaved: null,
         },
-      };
-      saveToLocalStorageImmediate(nextState);
-      return nextState;
-    });
-  }, []);
+      }));
+
+      void upsertActiveStateRow({
+        feeding_active: true,
+        feeding_side: breastSideToDbSide(lado),
+        feeding_start_time: iso,
+      });
+    },
+    [upsertActiveStateRow]
+  );
 
   const switchBreastAndSaveFirst = useCallback((): MamadaEvent | null => {
-    const active = data.activeFeeding;
+    const active = dataRef.current.activeFeeding;
     const startMs =
       active.startTime ?? (active.startedAt ? new Date(active.startedAt).getTime() : null);
 
@@ -847,31 +912,33 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     const nowMs = Date.now();
+    const start = new Date(startMs);
     const end = new Date(nowMs);
     const elapsedSeconds = Math.max(1, Math.floor((nowMs - startMs) / 1000));
     const durationMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
     const currentSide: BreastSide = active.lado || active.breast;
     const nextSide: BreastSide = currentSide === 'Esquerdo' ? 'Direito' : 'Esquerdo';
     const dateKey = getLocalDateKey(end);
+    const id = generateUuid();
 
     const firstBreastEvent: MamadaEvent = {
-      id: generateId('mamada'),
+      id,
       type: 'mamada',
       feedingType: 'peito',
       dateKey,
       timestamp: end.toISOString(),
-      timeFormatted: formatTimeHHMM(end),
+      timeFormatted: formatTimeHHMM(start),
       breast: currentSide,
       durationMinutes,
       durationSeconds: elapsedSeconds,
       notes: `1º lado antes de trocar para o Peito ${nextSide}`,
     };
 
-    void syncEventToSupabase(firstBreastEvent);
+    setLastBreastSideState(currentSide);
 
     setData((prev) => {
       const existingDayList = prev.days[dateKey] || [];
-      const nextState: RotineStorageData = {
+      return {
         ...prev,
         updatedAt: end.toISOString(),
         activeFeeding: {
@@ -891,34 +958,54 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
           [dateKey]: [firstBreastEvent, ...existingDayList],
         },
       };
-      saveToLocalStorageImmediate(nextState);
-      return nextState;
     });
 
     setNow(end);
+
+    void insertBabyEventToSupabase({
+      id,
+      type: 'mamada',
+      subtype: breastSideToDbSide(currentSide),
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      duration_seconds: elapsedSeconds,
+      amount_ml: null,
+      created_at: end.toISOString(),
+    });
+
+    void upsertActiveStateRow({
+      feeding_active: true,
+      feeding_side: breastSideToDbSide(nextSide),
+      feeding_start_time: end.toISOString(),
+      last_breast_side: breastSideToDbSide(currentSide),
+    });
+
     return firstBreastEvent;
-  }, [data.activeFeeding]);
+  }, [insertBabyEventToSupabase, upsertActiveStateRow]);
 
   const cancelFeedingTimer = useCallback(() => {
-    setData((prev) => {
-      const nextState: RotineStorageData = {
-        ...prev,
-        activeFeeding: {
-          ...prev.activeFeeding,
-          isFeeding: false,
-          startTime: null,
-          startedAt: null,
-          previousSideSaved: null,
-        },
-      };
-      saveToLocalStorageImmediate(nextState);
-      return nextState;
+    setData((prev) => ({
+      ...prev,
+      updatedAt: new Date().toISOString(),
+      activeFeeding: {
+        ...prev.activeFeeding,
+        isFeeding: false,
+        startTime: null,
+        startedAt: null,
+        previousSideSaved: null,
+      },
+    }));
+
+    void upsertActiveStateRow({
+      feeding_active: false,
+      feeding_side: null,
+      feeding_start_time: null,
     });
-  }, []);
+  }, [upsertActiveStateRow]);
 
   const stopFeedingTimer = useCallback(
     (notes?: string): MamadaEvent | null => {
-      const active = data.activeFeeding;
+      const active = dataRef.current.activeFeeding;
       const startMs =
         active.startTime ??
         (active.startedAt ? new Date(active.startedAt).getTime() : null);
@@ -928,31 +1015,33 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       const endMs = Date.now();
+      const start = new Date(startMs);
       const end = new Date(endMs);
       const elapsedSeconds = Math.max(1, Math.floor((endMs - startMs) / 1000));
       const diffMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
       const currentSide: BreastSide = active.lado || active.breast;
       const nextSide: BreastSide = currentSide === 'Esquerdo' ? 'Direito' : 'Esquerdo';
       const dateKey = getLocalDateKey(end);
+      const id = generateUuid();
 
       const newEvent: MamadaEvent = {
-        id: generateId('mamada'),
+        id,
         type: 'mamada',
         feedingType: 'peito',
         dateKey,
         timestamp: end.toISOString(),
-        timeFormatted: formatTimeHHMM(end),
+        timeFormatted: formatTimeHHMM(start),
         breast: currentSide,
         durationMinutes: diffMinutes,
         durationSeconds: elapsedSeconds,
         ...(notes ? { notes } : {}),
       };
 
-      void syncEventToSupabase(newEvent);
+      setLastBreastSideState(currentSide);
 
       setData((prev) => {
         const existingDayList = prev.days[dateKey] || [];
-        const nextState: RotineStorageData = {
+        return {
           ...prev,
           updatedAt: end.toISOString(),
           activeFeeding: {
@@ -968,22 +1057,41 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
             [dateKey]: [newEvent, ...existingDayList],
           },
         };
-        saveToLocalStorageImmediate(nextState);
-        return nextState;
       });
 
       setNow(end);
+
+      void insertBabyEventToSupabase({
+        id,
+        type: 'mamada',
+        subtype: breastSideToDbSide(currentSide),
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        duration_seconds: elapsedSeconds,
+        amount_ml: null,
+        created_at: end.toISOString(),
+      });
+
+      void upsertActiveStateRow({
+        feeding_active: false,
+        feeding_side: null,
+        feeding_start_time: null,
+        last_breast_side: breastSideToDbSide(currentSide),
+      });
+
       return newEvent;
     },
-    [data.activeFeeding]
+    [insertBabyEventToSupabase, upsertActiveStateRow]
   );
 
   const addFralda = useCallback(
     (diaperType: DiaperSubType, notes?: string): FraldaEvent => {
       const current = new Date();
       const dateKey = getLocalDateKey(current);
+      const id = generateUuid();
+
       const newEvent: FraldaEvent = {
-        id: generateId('fralda'),
+        id,
         type: 'fralda',
         dateKey,
         timestamp: current.toISOString(),
@@ -993,66 +1101,85 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         hasPoop: diaperType === 'coco' || diaperType === 'ambos',
         ...(notes ? { notes } : {}),
       };
-      insertEvent(newEvent);
+
+      appendEventToLocalState(newEvent);
       setNow(current);
+
+      const dbSubtype: 'xixi' | 'coco' | 'xixi_coco' =
+        diaperType === 'ambos' ? 'xixi_coco' : diaperType;
+
+      void insertBabyEventToSupabase({
+        id,
+        type: 'fralda',
+        subtype: dbSubtype,
+        start_time: current.toISOString(),
+        end_time: null,
+        duration_seconds: null,
+        amount_ml: null,
+        created_at: current.toISOString(),
+      });
+
       return newEvent;
     },
-    [insertEvent]
+    [appendEventToLocalState, insertBabyEventToSupabase]
   );
 
   const toggleSleep = useCallback(
     (notes?: string): SonoEvent | null => {
       const nowMs = Date.now();
       const current = new Date(nowMs);
+      const iso = current.toISOString();
       setNow(current);
 
-      if (!data.activeSleep.isSleeping) {
-        setData((prev) => {
-          const nextState: RotineStorageData = {
-            ...prev,
-            updatedAt: current.toISOString(),
-            activeSleep: {
-              isSleeping: true,
-              startTime: nowMs,
-              startedAt: current.toISOString(),
-            },
-          };
-          saveToLocalStorageImmediate(nextState);
-          return nextState;
+      const activeSleep = dataRef.current.activeSleep;
+
+      if (!activeSleep.isSleeping) {
+        setData((prev) => ({
+          ...prev,
+          updatedAt: iso,
+          activeSleep: {
+            isSleeping: true,
+            startTime: nowMs,
+            startedAt: iso,
+          },
+        }));
+
+        void upsertActiveStateRow({
+          sleeping_active: true,
+          sleeping_start_time: iso,
         });
+
         return null;
       } else {
         const startMs =
-          data.activeSleep.startTime ??
-          (data.activeSleep.startedAt
-            ? new Date(data.activeSleep.startedAt).getTime()
-            : nowMs);
+          activeSleep.startTime ??
+          (activeSleep.startedAt ? new Date(activeSleep.startedAt).getTime() : nowMs);
         const start = new Date(startMs);
         const elapsedSeconds = Math.max(1, Math.floor((nowMs - startMs) / 1000));
         const durationMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
         const dateKey = getLocalDateKey(current);
+        const id = generateUuid();
 
         const newSleepEvent: SonoEvent = {
-          id: generateId('sono'),
+          id,
           type: 'sono',
           dateKey,
-          timestamp: current.toISOString(),
+          timestamp: iso,
           timeFormatted: formatTimeHHMM(start),
           startTime: start.toISOString(),
-          endTime: current.toISOString(),
+          endTime: iso,
           durationMinutes,
           durationSeconds: elapsedSeconds,
           ...(notes ? { notes } : {}),
         };
 
-        void syncEventToSupabase(newSleepEvent);
         setManualWakeOverrideMs(nowMs);
 
         setData((prev) => {
           const existingDayList = prev.days[dateKey] || [];
-          const nextState: RotineStorageData = {
+          return {
             ...prev,
-            updatedAt: current.toISOString(),
+            updatedAt: iso,
             activeSleep: {
               isSleeping: false,
               startTime: null,
@@ -1063,23 +1190,40 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
               [dateKey]: [newSleepEvent, ...existingDayList],
             },
           };
-          saveToLocalStorageImmediate(nextState);
-          return nextState;
         });
+
+        void insertBabyEventToSupabase({
+          id,
+          type: 'sono',
+          subtype: null,
+          start_time: start.toISOString(),
+          end_time: iso,
+          duration_seconds: elapsedSeconds,
+          amount_ml: null,
+          created_at: iso,
+        });
+
+        void upsertActiveStateRow({
+          sleeping_active: false,
+          sleeping_start_time: null,
+        });
+
         return newSleepEvent;
       }
     },
-    [data.activeSleep]
+    [insertBabyEventToSupabase, upsertActiveStateRow]
   );
 
   const addManualSono = useCallback(
     (durationMinutes: number, notes?: string): SonoEvent => {
       const end = new Date();
-      const start = new Date(end.getTime() - durationMinutes * 60000);
+      const durationSeconds = Math.max(1, Math.round(durationMinutes * 60));
+      const start = new Date(end.getTime() - durationSeconds * 1000);
       const dateKey = getLocalDateKey(end);
+      const id = generateUuid();
 
       const newSleepEvent: SonoEvent = {
-        id: generateId('sono'),
+        id,
         type: 'sono',
         dateKey,
         timestamp: end.toISOString(),
@@ -1087,16 +1231,28 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         startTime: start.toISOString(),
         endTime: end.toISOString(),
         durationMinutes,
-        durationSeconds: durationMinutes * 60,
+        durationSeconds,
         ...(notes ? { notes } : {}),
       };
 
       setManualWakeOverrideMs(end.getTime());
-      insertEvent(newSleepEvent);
+      appendEventToLocalState(newSleepEvent);
       setNow(end);
+
+      void insertBabyEventToSupabase({
+        id,
+        type: 'sono',
+        subtype: null,
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        duration_seconds: durationSeconds,
+        amount_ml: null,
+        created_at: end.toISOString(),
+      });
+
       return newSleepEvent;
     },
-    [insertEvent]
+    [appendEventToLocalState, insertBabyEventToSupabase]
   );
 
   const addManualEventToday = useCallback(
@@ -1117,33 +1273,58 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         0
       );
       const timeFormatted = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+      const id = generateUuid();
 
       if (input.type === 'mamada') {
         const isBottle = input.feedingType === 'mamadeira';
-        const dur = Math.max(1, input.durationMinutes || 15);
+        const durMin = Math.max(1, input.durationMinutes || 15);
+        const durSec = durMin * 60;
+        const endDate = new Date(eventDate.getTime() + durSec * 1000);
+        const breast = input.breast || 'Esquerdo';
+
         const newMamada: MamadaEvent = {
-          id: generateId('mamada_manual'),
+          id,
           type: 'mamada',
           feedingType: isBottle ? 'mamadeira' : 'peito',
           dateKey,
           timestamp: eventDate.toISOString(),
           timeFormatted,
-          ...(isBottle
-            ? { volumeMl: input.volumeMl || 60 }
-            : { breast: input.breast || 'Esquerdo' }),
-          durationMinutes: dur,
-          durationSeconds: dur * 60,
+          ...(isBottle ? { volumeMl: input.volumeMl || 60 } : { breast }),
+          durationMinutes: durMin,
+          durationSeconds: durSec,
           ...(input.notes ? { notes: input.notes } : {}),
         };
-        insertEvent(newMamada);
+
+        appendEventToLocalState(newMamada);
+        if (!isBottle) {
+          setLastBreastSideState(breast);
+        }
         setNow(new Date());
+
+        void insertBabyEventToSupabase({
+          id,
+          type: 'mamada',
+          subtype: isBottle ? 'mamadeira' : breastSideToDbSide(breast),
+          start_time: eventDate.toISOString(),
+          end_time: endDate.toISOString(),
+          duration_seconds: durSec,
+          amount_ml: isBottle ? input.volumeMl || 60 : null,
+          created_at: new Date().toISOString(),
+        });
+
+        if (!isBottle) {
+          void upsertActiveStateRow({
+            last_breast_side: breastSideToDbSide(breast),
+          });
+        }
+
         return newMamada;
       }
 
       if (input.type === 'fralda') {
         const dType: DiaperSubType = input.diaperType || 'xixi';
         const newFralda: FraldaEvent = {
-          id: generateId('fralda_manual'),
+          id,
           type: 'fralda',
           dateKey,
           timestamp: eventDate.toISOString(),
@@ -1153,8 +1334,21 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
           hasPoop: dType === 'coco' || dType === 'ambos',
           ...(input.notes ? { notes: input.notes } : {}),
         };
-        insertEvent(newFralda);
+
+        appendEventToLocalState(newFralda);
         setNow(new Date());
+
+        void insertBabyEventToSupabase({
+          id,
+          type: 'fralda',
+          subtype: dType === 'ambos' ? 'xixi_coco' : dType,
+          start_time: eventDate.toISOString(),
+          end_time: null,
+          duration_seconds: null,
+          amount_ml: null,
+          created_at: new Date().toISOString(),
+        });
+
         return newFralda;
       }
 
@@ -1186,8 +1380,10 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         endDate = new Date(eventDate.getTime() + durationMinutes * 60000);
       }
 
+      const durationSeconds = durationMinutes * 60;
+
       const newSono: SonoEvent = {
-        id: generateId('sono_manual'),
+        id,
         type: 'sono',
         dateKey,
         timestamp: endDate.toISOString(),
@@ -1195,73 +1391,223 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         startTime: eventDate.toISOString(),
         endTime: endDate.toISOString(),
         durationMinutes,
-        durationSeconds: durationMinutes * 60,
+        durationSeconds,
         ...(input.notes ? { notes: input.notes } : {}),
       };
-      insertEvent(newSono);
+
+      appendEventToLocalState(newSono);
       setNow(new Date());
+
+      void insertBabyEventToSupabase({
+        id,
+        type: 'sono',
+        subtype: null,
+        start_time: eventDate.toISOString(),
+        end_time: endDate.toISOString(),
+        duration_seconds: durationSeconds,
+        amount_ml: null,
+        created_at: new Date().toISOString(),
+      });
+
       return newSono;
     },
-    [insertEvent]
+    [appendEventToLocalState, insertBabyEventToSupabase, upsertActiveStateRow]
   );
 
-  // Executa qualquer comando vindo de ?siri=... e exibe o Banner Grande de Confirmação no topo
+  /**
+   * EXECUÇÃO ASSÍNCRONA À PROVA DE FALHAS DOS ATALHOS DA SIRI (`?siri=...`)
+   * Consulta `baby_active_state` (id = 1) no Supabase primeiro, executa o INSERT/UPSERT
+   * com `await`, e somente depois limpa a URL e atualiza a tela.
+   */
   const executeSiriCommand = useCallback(
-    (rawCommand: string) => {
+    async (rawCommand: string): Promise<void> => {
       const cmd = rawCommand.trim().toLowerCase();
       const nowTime = new Date();
+      const nowIso = nowTime.toISOString();
       const timeFormatted = formatTimeHHMM(nowTime);
 
-      if (cmd === 'mamar_esquerdo') {
-        if (!data.activeFeeding.isFeeding) {
-          startFeedingTimer('Esquerdo');
-          setSiriConfirmationBanner({
-            command: cmd,
-            title: 'Siri: Mamada iniciada no Peito Esquerdo',
-            detail: `Cronômetro ativado às ${timeFormatted}.`,
-            tone: 'amber',
-            timeFormatted,
-          });
-        } else {
-          setSiriConfirmationBanner({
-            command: cmd,
-            title: `Siri: Cronômetro já está rodando (Peito ${data.activeFeeding.lado})`,
-            detail: 'A mamada atual continuou em andamento sem reiniciar.',
-            tone: 'amber',
-            timeFormatted,
-          });
+      // 1. Consulta o estado ativo real no Supabase (id = 1) para sincronizar entre Siri (Safari) e PWA
+      let remoteActive: BabyActiveStateRow | null = null;
+      try {
+        const { data: activeRow } = await supabase
+          .from('baby_active_state')
+          .select('*')
+          .eq('id', 1)
+          .maybeSingle();
+        if (activeRow) {
+          remoteActive = activeRow as BabyActiveStateRow;
         }
-      } else if (cmd === 'mamar_direito') {
-        if (!data.activeFeeding.isFeeding) {
-          startFeedingTimer('Direito');
+      } catch {
+        // Fallback para estado local se offline
+      }
+
+      const isCurrentlyFeeding =
+        remoteActive !== null
+          ? Boolean(remoteActive.feeding_active && remoteActive.feeding_start_time)
+          : dataRef.current.activeFeeding.isFeeding;
+
+      const activeFeedingSide: BreastSide =
+        remoteActive?.feeding_side
+          ? dbSideToBreastSide(remoteActive.feeding_side)
+          : dataRef.current.activeFeeding.lado;
+
+      const activeFeedingStartMs: number | null =
+        remoteActive?.feeding_start_time
+          ? new Date(remoteActive.feeding_start_time).getTime()
+          : dataRef.current.activeFeeding.startTime;
+
+      const isCurrentlySleeping =
+        remoteActive !== null
+          ? Boolean(remoteActive.sleeping_active && remoteActive.sleeping_start_time)
+          : dataRef.current.activeSleep.isSleeping;
+
+      const activeSleepingStartMs: number | null =
+        remoteActive?.sleeping_start_time
+          ? new Date(remoteActive.sleeping_start_time).getTime()
+          : dataRef.current.activeSleep.startTime;
+
+      // Comando genérico ?siri=mamar (escolhe automaticamente o peito oposto ao último utilizado)
+      if (cmd === 'mamar' || cmd === 'mamar_esquerdo' || cmd === 'mamar_direito') {
+        let targetSide: BreastSide = 'Esquerdo';
+
+        if (cmd === 'mamar_esquerdo') {
+          targetSide = 'Esquerdo';
+        } else if (cmd === 'mamar_direito') {
+          targetSide = 'Direito';
+        } else {
+          // ?siri=mamar -> verifica last_breast_side no Supabase ou última mamada
+          let lastSide: BreastSide | null = remoteActive?.last_breast_side
+            ? dbSideToBreastSide(remoteActive.last_breast_side)
+            : lastBreastRef.current;
+
+          if (!lastSide) {
+            try {
+              const { data: lastFeedRows } = await supabase
+                .from('baby_events')
+                .select('subtype')
+                .eq('type', 'mamada')
+                .in('subtype', ['esquerdo', 'direito'])
+                .order('start_time', { ascending: false })
+                .limit(1);
+              if (lastFeedRows && lastFeedRows.length > 0 && lastFeedRows[0].subtype) {
+                lastSide = dbSideToBreastSide(lastFeedRows[0].subtype);
+              }
+            } catch {
+              // ignore
+            }
+          }
+
+          targetSide = lastSide === 'Esquerdo' ? 'Direito' : 'Esquerdo';
+        }
+
+        if (!isCurrentlyFeeding) {
+          const startMs = nowTime.getTime();
+          setData((prev) => ({
+            ...prev,
+            updatedAt: nowIso,
+            activeFeeding: {
+              isFeeding: true,
+              lado: targetSide,
+              breast: targetSide,
+              startTime: startMs,
+              startedAt: nowIso,
+              previousSideSaved: null,
+            },
+          }));
+
+          await upsertActiveStateRow({
+            feeding_active: true,
+            feeding_side: breastSideToDbSide(targetSide),
+            feeding_start_time: nowIso,
+          });
+
           setSiriConfirmationBanner({
             command: cmd,
-            title: 'Siri: Mamada iniciada no Peito Direito',
-            detail: `Cronômetro ativado às ${timeFormatted}.`,
+            title: `Siri: Mamada iniciada no Peito ${targetSide}`,
+            detail:
+              cmd === 'mamar'
+                ? `Peito ${targetSide} selecionado automaticamente (oposto ao último) às ${timeFormatted}.`
+                : `Cronômetro ativado às ${timeFormatted}.`,
             tone: 'amber',
             timeFormatted,
           });
         } else {
           setSiriConfirmationBanner({
             command: cmd,
-            title: `Siri: Cronômetro já está rodando (Peito ${data.activeFeeding.lado})`,
+            title: `Siri: Cronômetro já está rodando (Peito ${activeFeedingSide})`,
             detail: 'A mamada atual continuou em andamento sem reiniciar.',
             tone: 'amber',
             timeFormatted,
           });
         }
       } else if (cmd === 'parar_mamada') {
-        if (data.activeFeeding.isFeeding) {
-          const saved = stopFeedingTimer('Finalizada via comando da Siri');
-          const durText = saved
-            ? formatSecondsHuman(saved.durationSeconds, saved.durationMinutes)
-            : '';
+        if (isCurrentlyFeeding && activeFeedingStartMs) {
+          const endMs = nowTime.getTime();
+          const startObj = new Date(activeFeedingStartMs);
+          const elapsedSeconds = Math.max(1, Math.floor((endMs - activeFeedingStartMs) / 1000));
+          const durationMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
+          const dateKey = getLocalDateKey(nowTime);
+          const nextSide: BreastSide =
+            activeFeedingSide === 'Esquerdo' ? 'Direito' : 'Esquerdo';
+          const id = generateUuid();
+
+          const newEvent: MamadaEvent = {
+            id,
+            type: 'mamada',
+            feedingType: 'peito',
+            dateKey,
+            timestamp: nowIso,
+            timeFormatted: formatTimeHHMM(startObj),
+            breast: activeFeedingSide,
+            durationMinutes,
+            durationSeconds: elapsedSeconds,
+            notes: 'Finalizada via comando da Siri',
+          };
+
+          setLastBreastSideState(activeFeedingSide);
+          setData((prev) => {
+            const existingDayList = prev.days[dateKey] || [];
+            return {
+              ...prev,
+              updatedAt: nowIso,
+              activeFeeding: {
+                isFeeding: false,
+                lado: nextSide,
+                breast: nextSide,
+                startTime: null,
+                startedAt: null,
+                previousSideSaved: null,
+              },
+              days: {
+                ...prev.days,
+                [dateKey]: [newEvent, ...existingDayList],
+              },
+            };
+          });
+
+          await insertBabyEventToSupabase({
+            id,
+            type: 'mamada',
+            subtype: breastSideToDbSide(activeFeedingSide),
+            start_time: startObj.toISOString(),
+            end_time: nowIso,
+            duration_seconds: elapsedSeconds,
+            amount_ml: null,
+            created_at: nowIso,
+          });
+
+          await upsertActiveStateRow({
+            feeding_active: false,
+            feeding_side: null,
+            feeding_start_time: null,
+            last_breast_side: breastSideToDbSide(activeFeedingSide),
+          });
+
+          const durText = formatSecondsHuman(elapsedSeconds, durationMinutes);
           setSiriConfirmationBanner({
             command: cmd,
             title: 'Siri: Mamada finalizada e salva!',
-            detail: saved
-              ? `Peito ${saved.breast} (${durText}) registrado no histórico às ${timeFormatted}.`
-              : `Mamada encerrada às ${timeFormatted}.`,
+            detail: `Peito ${activeFeedingSide} (${durText}) registrado no histórico às ${timeFormatted}.`,
             tone: 'amber',
             timeFormatted,
           });
@@ -1274,36 +1620,74 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
             timeFormatted,
           });
         }
-      } else if (cmd === 'xixi') {
-        addFralda('xixi', 'Registrado via Siri');
-        setSiriConfirmationBanner({
-          command: cmd,
-          title: 'Siri: Fralda de Xixi registrada!',
-          detail: `Só Xixi salvo às ${timeFormatted} (+1 na meta de hidratação).`,
-          tone: 'emerald',
+      } else if (cmd === 'xixi' || cmd === 'coco' || cmd === 'xixi_coco') {
+        const diaperType: DiaperSubType =
+          cmd === 'coco' ? 'coco' : cmd === 'xixi_coco' ? 'ambos' : 'xixi';
+        const dateKey = getLocalDateKey(nowTime);
+        const id = generateUuid();
+
+        const newEvent: FraldaEvent = {
+          id,
+          type: 'fralda',
+          dateKey,
+          timestamp: nowIso,
           timeFormatted,
+          diaperType,
+          hasPee: diaperType === 'xixi' || diaperType === 'ambos',
+          hasPoop: diaperType === 'coco' || diaperType === 'ambos',
+          notes: 'Registrado via Siri',
+        };
+
+        appendEventToLocalState(newEvent);
+
+        await insertBabyEventToSupabase({
+          id,
+          type: 'fralda',
+          subtype: cmd as 'xixi' | 'coco' | 'xixi_coco',
+          start_time: nowIso,
+          end_time: null,
+          duration_seconds: null,
+          amount_ml: null,
+          created_at: nowIso,
         });
-      } else if (cmd === 'coco') {
-        addFralda('coco', 'Registrado via Siri');
+
+        const titleMap = {
+          xixi: 'Siri: Fralda de Xixi registrada!',
+          coco: 'Siri: Fralda de Cocô registrada!',
+          xixi_coco: 'Siri: Fralda de Xixi + Cocô registrada!',
+        } as const;
+
+        const detailMap = {
+          xixi: `Só Xixi salvo às ${timeFormatted} (+1 na meta de hidratação).`,
+          coco: `Só Cocô salvo no histórico às ${timeFormatted}.`,
+          xixi_coco: `Xixi + Cocô salvo às ${timeFormatted} (+1 na meta de hidratação).`,
+        } as const;
+
         setSiriConfirmationBanner({
           command: cmd,
-          title: 'Siri: Fralda de Cocô registrada!',
-          detail: `Só Cocô salvo no histórico às ${timeFormatted}.`,
-          tone: 'emerald',
-          timeFormatted,
-        });
-      } else if (cmd === 'xixi_coco') {
-        addFralda('ambos', 'Registrado via Siri');
-        setSiriConfirmationBanner({
-          command: cmd,
-          title: 'Siri: Fralda de Xixi + Cocô registrada!',
-          detail: `Xixi + Cocô salvo às ${timeFormatted} (+1 na meta de hidratação).`,
+          title: titleMap[cmd as 'xixi' | 'coco' | 'xixi_coco'],
+          detail: detailMap[cmd as 'xixi' | 'coco' | 'xixi_coco'],
           tone: 'emerald',
           timeFormatted,
         });
       } else if (cmd === 'dormiu') {
-        if (!data.activeSleep.isSleeping) {
-          toggleSleep();
+        if (!isCurrentlySleeping) {
+          const startMs = nowTime.getTime();
+          setData((prev) => ({
+            ...prev,
+            updatedAt: nowIso,
+            activeSleep: {
+              isSleeping: true,
+              startTime: startMs,
+              startedAt: nowIso,
+            },
+          }));
+
+          await upsertActiveStateRow({
+            sleeping_active: true,
+            sleeping_start_time: nowIso,
+          });
+
           setSiriConfirmationBanner({
             command: cmd,
             title: 'Siri: Cronômetro de Sono iniciado!',
@@ -1321,17 +1705,66 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
           });
         }
       } else if (cmd === 'acordou') {
-        if (data.activeSleep.isSleeping) {
-          const savedSleep = toggleSleep('Finalizado via comando da Siri');
-          const durText = savedSleep
-            ? formatSecondsHuman(savedSleep.durationSeconds, savedSleep.durationMinutes)
-            : '';
+        if (isCurrentlySleeping && activeSleepingStartMs) {
+          const endMs = nowTime.getTime();
+          const startObj = new Date(activeSleepingStartMs);
+          const elapsedSeconds = Math.max(1, Math.floor((endMs - activeSleepingStartMs) / 1000));
+          const durationMinutes = Math.max(1, Math.round(elapsedSeconds / 60));
+          const dateKey = getLocalDateKey(nowTime);
+          const id = generateUuid();
+
+          const newSleepEvent: SonoEvent = {
+            id,
+            type: 'sono',
+            dateKey,
+            timestamp: nowIso,
+            timeFormatted: formatTimeHHMM(startObj),
+            startTime: startObj.toISOString(),
+            endTime: nowIso,
+            durationMinutes,
+            durationSeconds: elapsedSeconds,
+            notes: 'Finalizado via comando da Siri',
+          };
+
+          setManualWakeOverrideMs(endMs);
+          setData((prev) => {
+            const existingDayList = prev.days[dateKey] || [];
+            return {
+              ...prev,
+              updatedAt: nowIso,
+              activeSleep: {
+                isSleeping: false,
+                startTime: null,
+                startedAt: null,
+              },
+              days: {
+                ...prev.days,
+                [dateKey]: [newSleepEvent, ...existingDayList],
+              },
+            };
+          });
+
+          await insertBabyEventToSupabase({
+            id,
+            type: 'sono',
+            subtype: null,
+            start_time: startObj.toISOString(),
+            end_time: nowIso,
+            duration_seconds: elapsedSeconds,
+            amount_ml: null,
+            created_at: nowIso,
+          });
+
+          await upsertActiveStateRow({
+            sleeping_active: false,
+            sleeping_start_time: null,
+          });
+
+          const durText = formatSecondsHuman(elapsedSeconds, durationMinutes);
           setSiriConfirmationBanner({
             command: cmd,
             title: 'Siri: O Bebê Acordou • Sono salvo!',
-            detail: savedSleep
-              ? `Soneca de ${durText} registrada no histórico às ${timeFormatted}.`
-              : `Ciclo de sono encerrado às ${timeFormatted}.`,
+            detail: `Soneca de ${durText} registrada no histórico às ${timeFormatted}.`,
             tone: 'sky',
             timeFormatted,
           });
@@ -1346,25 +1779,25 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       }
 
-      // Limpa a URL imediatamente para não repetir a ação se a página for recarregada
+      // 2. Limpa a URL SOMENTE APÓS concluir o await do Supabase
       try {
         window.history.replaceState({}, '', '/');
       } catch (err) {
         console.error('Erro ao limpar URL:', err);
       }
+
+      // 3. Atualiza a tela sincronizando com o Supabase
+      await refreshFromSupabase();
     },
     [
-      data.activeFeeding.isFeeding,
-      data.activeFeeding.lado,
-      data.activeSleep.isSleeping,
-      startFeedingTimer,
-      stopFeedingTimer,
-      addFralda,
-      toggleSleep,
+      appendEventToLocalState,
+      insertBabyEventToSupabase,
+      refreshFromSupabase,
+      upsertActiveStateRow,
     ]
   );
 
-  // Escuta parâmetros ?siri=... na URL ao carregar o aplicativo
+  // Trava de execução única (useRef) para ler ?siri=... ao abrir o app sem duplicar no StrictMode
   const hasProcessedInitialUrlRef = useRef(false);
   useEffect(() => {
     if (hasProcessedInitialUrlRef.current) return;
@@ -1372,7 +1805,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const siriParam = params.get('siri');
     if (siriParam) {
       hasProcessedInitialUrlRef.current = true;
-      executeSiriCommand(siriParam);
+      void executeSiriCommand(siriParam);
     }
   }, [executeSiriCommand]);
 
@@ -1391,17 +1824,10 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const deleteEvent = useCallback((id: string, dateKey: string) => {
-    void (async () => {
-      try {
-        await supabase.from('routine_events').delete().eq('id', id);
-      } catch {
-        // Ignora caso offline ou tabela ainda não criada
-      }
-    })();
     setData((prev) => {
       const dayList = prev.days[dateKey] || [];
       const filtered = dayList.filter((item) => item.id !== id);
-      const nextState: RotineStorageData = {
+      return {
         ...prev,
         updatedAt: new Date().toISOString(),
         days: {
@@ -1409,43 +1835,63 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
           [dateKey]: filtered,
         },
       };
-      saveToLocalStorageImmediate(nextState);
-      return nextState;
     });
+
+    void (async () => {
+      try {
+        await supabase.from('baby_events').delete().eq('id', id);
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  /**
+   * Zera 100% dos dados do aplicativo (no Supabase e localmente)
+   */
+  const clearAllRecords = useCallback(async () => {
+    const current = new Date();
+    const zeroed = createZeroedState(current);
+    cleanupLegacyMockStorage();
+    try {
+      localStorage.removeItem(SUPABASE_CACHE_KEY);
+    } catch {
+      // ignore
+    }
+
+    setManualWakeOverrideMs(null);
+    setLastBreastSideState(null);
+    setData(zeroed);
+    setNow(current);
+
+    try {
+      await Promise.all([
+        supabase
+          .from('baby_events')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000'),
+        supabase.from('baby_active_state').upsert(
+          {
+            id: 1,
+            feeding_active: false,
+            feeding_side: null,
+            feeding_start_time: null,
+            sleeping_active: false,
+            sleeping_start_time: null,
+            last_breast_side: null,
+            updated_at: current.toISOString(),
+          },
+          { onConflict: 'id' }
+        ),
+      ]);
+    } catch (err) {
+      console.warn('Erro ao zerar dados no Supabase:', err);
+    }
   }, []);
 
   const resetToSampleData = useCallback(() => {
-    const current = new Date();
-    const freshSeed = createInitialSeedData(current);
-    saveToLocalStorageImmediate(freshSeed);
-    setManualWakeOverrideMs(null);
-    setData(freshSeed);
-    setNow(current);
-  }, []);
-
-  const clearAllRecords = useCallback(() => {
-    const current = new Date();
-    setManualWakeOverrideMs(null);
-    setData((prev) => {
-      const nextState: RotineStorageData = {
-        ...prev,
-        updatedAt: current.toISOString(),
-        activeSleep: { isSleeping: false, startTime: null, startedAt: null },
-        activeFeeding: {
-          isFeeding: false,
-          lado: 'Esquerdo',
-          breast: 'Esquerdo',
-          startTime: null,
-          startedAt: null,
-          previousSideSaved: null,
-        },
-        days: {},
-      };
-      saveToLocalStorageImmediate(nextState);
-      return nextState;
-    });
-    setNow(current);
-  }, []);
+    void clearAllRecords();
+  }, [clearAllRecords]);
 
   const value = useMemo(
     () => ({
@@ -1455,6 +1901,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       todayEvents,
       allEventsSorted,
       todaySummary,
+      isLoadingSupabase,
       siriConfirmationBanner,
       dismissSiriBanner,
       executeSiriCommand,
@@ -1472,6 +1919,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       deleteEvent,
       resetToSampleData,
       clearAllRecords,
+      refreshFromSupabase,
     }),
     [
       data,
@@ -1480,6 +1928,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       todayEvents,
       allEventsSorted,
       todaySummary,
+      isLoadingSupabase,
       siriConfirmationBanner,
       dismissSiriBanner,
       executeSiriCommand,
@@ -1497,6 +1946,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       deleteEvent,
       resetToSampleData,
       clearAllRecords,
+      refreshFromSupabase,
     ]
   );
 

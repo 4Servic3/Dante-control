@@ -19,6 +19,12 @@ interface SiriShortcutItem {
 
 const SIRI_SHORTCUTS: SiriShortcutItem[] = [
   {
+    param: 'mamar',
+    voicePhrase: '"E aí Siri, o bebê vai mamar"',
+    description: 'Inicia automaticamente no peito OPOSTO ao último utilizado',
+    tone: 'peach',
+  },
+  {
     param: 'mamar_esquerdo',
     voicePhrase: '"E aí Siri, mamar peito esquerdo"',
     description: 'Inicia o cronômetro de mamada no Peito Esquerdo',
@@ -33,7 +39,7 @@ const SIRI_SHORTCUTS: SiriShortcutItem[] = [
   {
     param: 'parar_mamada',
     voicePhrase: '"E aí Siri, parar mamada"',
-    description: 'Finaliza a mamada ativa e salva no histórico',
+    description: 'Finaliza a mamada ativa no Supabase e salva no histórico',
     tone: 'peach',
   },
   {
@@ -57,7 +63,7 @@ const SIRI_SHORTCUTS: SiriShortcutItem[] = [
   {
     param: 'dormiu',
     voicePhrase: '"E aí Siri, o bebê dormiu"',
-    description: 'Inicia o cronômetro de sono do bebê',
+    description: 'Inicia o cronômetro de sono do bebê no Supabase',
     tone: 'indigo',
   },
   {
@@ -103,14 +109,14 @@ export const SiriShortcutsPanel: React.FC<SiriShortcutsPanelProps> = ({
     }
   };
 
-  const handleTestCommand = (param: SiriCommandKey) => {
+  const handleTestCommand = async (param: SiriCommandKey) => {
     try {
       window.history.replaceState({}, '', `/?siri=${param}`);
     } catch {
       // ignore
     }
-    executeSiriCommand(param);
     onClose();
+    await executeSiriCommand(param);
   };
 
   return (

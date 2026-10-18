@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Droplets,
   HeartHandshake,
   Moon,
   Plus,
-  RotateCcw,
   Trash2,
   X,
 } from 'lucide-react';
@@ -17,19 +17,26 @@ import {
   FeedingSubType,
   RoutineEvent,
 } from '../types/routine';
-import { formatDurationMinutes, formatTimeHHMM } from '../utils/dateHelpers';
+import {
+  formatDurationMinutes,
+  formatSecondsHuman,
+  formatTimeHHMM,
+} from '../utils/dateHelpers';
 
 export const HistoryView: React.FC = () => {
   const {
     todayEvents,
+    allEventsSorted,
     addManualEventToday,
     deleteEvent,
-    resetToSampleData,
+    clearAllRecords,
   } = useRoutine();
 
   const [filter, setFilter] = useState<'todos' | EventType>('todos');
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualFeedback, setManualFeedback] = useState<string | null>(null);
+  const [confirmResetModal, setConfirmResetModal] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
 
   const [manualType, setManualType] = useState<EventType>('mamada');
   const [manualTime, setManualTime] = useState<string>(() => {
@@ -78,12 +85,25 @@ export const HistoryView: React.FC = () => {
     window.setTimeout(() => setManualFeedback(null), 3500);
   };
 
+  const handleConfirmClearAll = async () => {
+    setIsClearingAll(true);
+    try {
+      await clearAllRecords();
+      setConfirmResetModal(false);
+      setManualFeedback('Todos os dados do aplicativo foram zerados com sucesso.');
+      window.setTimeout(() => setManualFeedback(null), 3500);
+    } finally {
+      setIsClearingAll(false);
+    }
+  };
+
   const renderTimelineItem = (ev: RoutineEvent) => {
     if (ev.type === 'mamada') {
       const isBottle = ev.feedingType === 'mamadeira';
+      const durText = formatSecondsHuman(ev.durationSeconds, ev.durationMinutes);
       const titleText = isBottle
         ? `${ev.timeFormatted} - Mamada (Mamadeira / Fórmula) - ${ev.volumeMl}ml`
-        : `${ev.timeFormatted} - Mamada (Peito ${ev.breast}) - ${ev.durationMinutes} min`;
+        : `${ev.timeFormatted} - Mamada (Peito ${ev.breast}) - ${durText}`;
 
       return (
         <div
@@ -167,7 +187,10 @@ export const HistoryView: React.FC = () => {
     const endHHMM = ev.endTime
       ? formatTimeHHMM(new Date(ev.endTime))
       : formatTimeHHMM(new Date(ev.timestamp));
-    const formattedSleepDuration = formatDurationMinutes(ev.durationMinutes);
+    const formattedSleepDuration =
+      ev.durationSeconds && ev.durationSeconds < 60
+        ? formatSecondsHuman(ev.durationSeconds, ev.durationMinutes)
+        : formatDurationMinutes(ev.durationMinutes);
     const titleText = `${startHHMM} às ${endHHMM} - Sono (${formattedSleepDuration})`;
 
     return (
@@ -498,16 +521,50 @@ export const HistoryView: React.FC = () => {
         )}
       </div>
 
-      {/* Rodapé discreto para restaurar dados de exemplo */}
-      <div className="pt-2 pb-2 flex justify-center">
-        <button
-          type="button"
-          onClick={resetToSampleData}
-          className="py-2 px-4 rounded-full bg-white shadow-sm border border-black/[0.04] text-xs font-medium text-[#8E8E93] hover:text-[#1C1C1E] flex items-center gap-1.5 active:scale-95 transition-transform"
-        >
-          <RotateCcw className="w-3.5 h-3.5 text-[#007AFF]" />
-          Restaurar rotina de exemplo (7 dias)
-        </button>
+      {/* Rodapé discreto: Zerar todos os dados do app (com confirmação de segurança) */}
+      <div className="pt-3 pb-2 flex flex-col items-center gap-2">
+        {!confirmResetModal ? (
+          <button
+            type="button"
+            onClick={() => setConfirmResetModal(true)}
+            className="py-2 px-4 rounded-full bg-white shadow-sm border border-black/[0.04] text-xs font-medium text-[#8E8E93] hover:text-[#FF3B30] flex items-center gap-1.5 active:scale-95 transition-transform"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-[#FF3B30]" />
+            Zerar todos os dados do app
+          </button>
+        ) : (
+          <div className="w-full rounded-3xl bg-white p-4 shadow-md border border-[#FF3B30]/20 space-y-3 text-center">
+            <div className="w-10 h-10 rounded-2xl bg-[#FFF0ED] text-[#FF3B30] flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-bold text-[#1C1C1E]">
+                Zerar todos os dados do app?
+              </p>
+              <p className="text-xs text-[#8E8E93] leading-relaxed">
+                Isso apagará permanentemente os {allEventsSorted.length} registros salvos e reiniciará os cronômetros ativos no Supabase.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmResetModal(false)}
+                disabled={isClearingAll}
+                className="py-2.5 rounded-2xl bg-[#F2F2F7] text-[#1C1C1E] text-xs font-bold active:scale-95 transition-transform"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmClearAll()}
+                disabled={isClearingAll}
+                className="py-2.5 rounded-2xl bg-[#FF3B30] text-white text-xs font-bold shadow-sm active:scale-95 transition-transform disabled:opacity-60"
+              >
+                {isClearingAll ? 'Zerando...' : 'Sim, Zerar Tudo'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

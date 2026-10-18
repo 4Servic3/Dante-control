@@ -71,19 +71,26 @@ export function formatDurationMinutes(totalMinutes: number): string {
 }
 
 /**
- * Formata segundos em texto curto amigável (ex: "12m 30s" ou "45s")
+ * Formata segundos em texto curto amigável (ex: "25 seg", "1 min", "12 min 30 seg")
  */
 export function formatSecondsHuman(totalSeconds?: number, fallbackMinutes?: number): string {
   if (typeof totalSeconds === 'number' && totalSeconds > 0) {
     if (totalSeconds < 60) {
-      return `${totalSeconds}s`;
+      return `${totalSeconds} seg`;
     }
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
-    return secs > 0 ? `${mins}m ${secs}s` : `${mins} min`;
+    if (mins >= 60) {
+      return formatDurationMinutes(mins);
+    }
+    return secs > 0 ? `${mins} min ${secs} seg` : `${mins} min`;
   }
-  return `${fallbackMinutes ?? 1} min`;
+  if (typeof fallbackMinutes === 'number' && fallbackMinutes > 0) {
+    return `${fallbackMinutes} min`;
+  }
+  return '1 seg';
 }
+
 
 /**
  * Calcula e formata o tempo decorrido comparando o horário atual (Date.now())
