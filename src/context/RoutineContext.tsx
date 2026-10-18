@@ -524,15 +524,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
 
         setData((prev) => {
-          // Se o banco retornou eventos ou se o banco está vazio sem erro, usa os dados do banco.
-          // Caso o banco esteja vazio apenas porque RLS bloqueou a escrita anterior na mesma sessão,
-          // preserva os eventos locais recém-criados pela mãe para não sumirem da tela.
-          const mergedDays =
-            mappedEvents.length > 0
-              ? remoteDays
-              : Object.keys(prev.days).length > 0
-              ? prev.days
-              : {};
+          const mergedDays = hasValidEventsResponse ? remoteDays : prev.days;
 
           const nextFeedingActive = activeRow
             ? Boolean(activeRow.feeding_active && activeRow.feeding_start_time)
