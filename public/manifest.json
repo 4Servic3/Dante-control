@@ -1,0 +1,42 @@
+{
+  "name": "Rotina Bebê • Rotinê",
+  "short_name": "Rotina Bebê",
+  "description": "Controle acolhedor de rotina para recém-nascido: amamentação, fraldas, janela de sono e resumo para o pediatra.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Mamar Peito Esquerdo",
+      "short_name": "Peito Esq",
+      "url": "/?siri=mamar_esquerdo"
+    },
+    {
+      "name": "Mamar Peito Direito",
+      "short_name": "Peito Dir",
+      "url": "/?siri=mamar_direito"
+    },
+    {
+      "name": "Registrar Xixi",
+      "short_name": "Só Xixi",
+      "url": "/?siri=xixi"
+    },
+    {
+      "name": "O Bebê Dormiu",
+      "short_name": "Dormiu",
+      "url": "/?siri=dormiu"
+    }
+  ]
+}
