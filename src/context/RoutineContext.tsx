@@ -28,6 +28,7 @@ import {
   getLocalDateKey,
   getStartOfToday,
 } from '../utils/dateHelpers';
+import { supabase } from '../utils/supabase/client';
 
 export const STORAGE_KEY = 'rotine_baby_data_v1';
 
@@ -58,6 +59,50 @@ function saveToLocalStorageImmediate(state: RotineStorageData) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state, null, 2));
   } catch (err) {
     console.error('Erro ao salvar dados no localStorage:', err);
+  }
+}
+
+async function syncStateToSupabase(state: RotineStorageData) {
+  try {
+    await supabase.from('routine_state').upsert(
+      {
+        id: 'default_baby',
+        baby_name: state.babyProfile.name,
+        payload: state,
+        updated_at: state.updatedAt || new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+  } catch {
+    // Caso a tabela ainda não tenha sido criada no Supabase, mantém offline no localStorage sem erros
+  }
+}
+
+async function syncEventToSupabase(ev: RoutineEvent) {
+  try {
+    await supabase.from('routine_events').upsert(
+      {
+        id: ev.id,
+        type: ev.type,
+        date_key: ev.dateKey,
+        timestamp: ev.timestamp,
+        time_formatted: ev.timeFormatted,
+        feeding_type: ev.type === 'mamada' ? ev.feedingType || 'peito' : null,
+        breast: ev.type === 'mamada' ? ev.breast || null : null,
+        volume_ml: ev.type === 'mamada' ? ev.volumeMl || null : null,
+        diaper_type: ev.type === 'fralda' ? ev.diaperType : null,
+        has_pee: ev.type === 'fralda' ? ev.hasPee : null,
+        has_poop: ev.type === 'fralda' ? ev.hasPoop : null,
+        start_time: ev.type === 'sono' ? ev.startTime : null,
+        end_time: ev.type === 'sono' ? ev.endTime : null,
+        duration_minutes: 'durationMinutes' in ev ? ev.durationMinutes : null,
+        duration_seconds: 'durationSeconds' in ev ? ev.durationSeconds || null : null,
+        notes: ev.notes || null,
+      },
+      { onConflict: 'id' }
+    );
+  } catch {
+    // Ignora silenciosamente se a tabela não existir ainda
   }
 }
 
@@ -530,7 +575,40 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     saveToLocalStorageImmediate(data);
+    void syncStateToSupabase(data);
   }, [data]);
+
+  // Busca estado salvo no Supabase ao iniciar caso exista na nuvem
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const { data: row, error } = await supabase
+          .from('routine_state')
+          .select('payload, updated_at')
+          .eq('id', 'default_baby')
+          .maybeSingle();
+
+        if (!error && row?.payload && isMounted) {
+          const remoteState = normalizeStoredData(row.payload as RotineStorageData);
+          setData((localPrev) => {
+            const remoteTime = new Date(remoteState.updatedAt || 0).getTime();
+            const localTime = new Date(localPrev.updatedAt || 0).getTime();
+            if (remoteTime > localTime) {
+              saveToLocalStorageImmediate(remoteState);
+              return remoteState;
+            }
+            return localPrev;
+          });
+        }
+      } catch {
+        // Permanece usando localStorage caso offline ou tabela ainda não criada
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     const syncClockOnWake = () => {
@@ -673,6 +751,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
   ]);
 
   const insertEvent = useCallback((newEvent: RoutineEvent) => {
+    void syncEventToSupabase(newEvent);
     setData((prev) => {
       const existingDayList = prev.days[newEvent.dateKey] || [];
       const updatedDayList = [newEvent, ...existingDayList].sort(
@@ -788,6 +867,8 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
       notes: `1º lado antes de trocar para o Peito ${nextSide}`,
     };
 
+    void syncEventToSupabase(firstBreastEvent);
+
     setData((prev) => {
       const existingDayList = prev.days[dateKey] || [];
       const nextState: RotineStorageData = {
@@ -866,6 +947,8 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
         durationSeconds: elapsedSeconds,
         ...(notes ? { notes } : {}),
       };
+
+      void syncEventToSupabase(newEvent);
 
       setData((prev) => {
         const existingDayList = prev.days[dateKey] || [];
@@ -962,6 +1045,7 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ...(notes ? { notes } : {}),
         };
 
+        void syncEventToSupabase(newSleepEvent);
         setManualWakeOverrideMs(nowMs);
 
         setData((prev) => {
@@ -1307,6 +1391,13 @@ export const RoutineProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const deleteEvent = useCallback((id: string, dateKey: string) => {
+    void (async () => {
+      try {
+        await supabase.from('routine_events').delete().eq('id', id);
+      } catch {
+        // Ignora caso offline ou tabela ainda não criada
+      }
+    })();
     setData((prev) => {
       const dayList = prev.days[dateKey] || [];
       const filtered = dayList.filter((item) => item.id !== id);
